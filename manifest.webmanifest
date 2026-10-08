@@ -1,0 +1,12 @@
+{
+  "name": "房間擺設",
+  "short_name": "房間擺設",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f1ec",
+  "theme_color": "#fffdf9",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

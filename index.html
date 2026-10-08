@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>房間擺設</title>
+  <meta name="description" content="用自己量的尺寸模擬房間與傢俱擺設：2D 精確定位、3D 走進去看看。">
+  <meta name="theme-color" content="#fffdf9">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="房間擺設">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" type="image/png" href="icon-180.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <button id="btnProj" class="ghost proj" title="切換空間"><span class="pico">⌂</span><span id="projName"></span><span class="caret">▾</span></button>
+    <div class="seg" id="viewSeg"><button data-v="2d" class="on">2D</button><button data-v="3d">3D</button></div>
+    <span class="sp"></span>
+    <button id="btnUndo" class="ghost icon" title="復原 ⌘Z" disabled>↶</button>
+    <button id="btnRedo" class="ghost icon" title="重做 ⇧⌘Z" disabled>↷</button>
+    <button id="btnMenu" class="ghost icon" title="選單">☰</button>
+  </header>
+
+  <div id="main">
+    <aside id="side">
+      <div class="grab"><span></span><button id="sheetClose" class="ghost x">✕</button></div>
+      <nav class="tabs"><button data-tab="lib" class="on">物品庫</button><button data-tab="room">房間</button><button data-tab="lay">擺法</button></nav>
+      <div id="tab-lib" class="tab"></div>
+      <div id="tab-room" class="tab" hidden></div>
+      <div id="tab-lay" class="tab" hidden></div>
+    </aside>
+
+    <section id="stage">
+      <canvas id="c2d"></canvas>
+      <div id="v3d" hidden></div>
+
+      <div id="tools2d" class="float">
+        <div class="seg" id="modeSeg"><button data-m="select" class="on">選取</button><button data-m="measure">量測線</button></div>
+        <span class="zoom"><button id="zoomOut" title="縮小">－</button><button id="zoomIn" title="放大">＋</button><button id="zoomFit" title="顯示整個房間">全覽</button></span>
+      </div>
+      <div id="tools3d" class="float" hidden>
+        <div class="seg" id="camSeg"><button data-m="orbit" class="on">環繞</button><button data-m="walk">走動</button></div>
+        <label id="eyeBox" class="eye" hidden>眼高<input type="range" id="eye" min="30" max="210" step="1"><span id="eyeVal"></span></label>
+        <button id="btnPLock" hidden>滑鼠鎖定</button>
+      </div>
+      <div id="walkHelp" hidden></div>
+      <div id="joy" hidden><div class="knob"></div></div>
+
+      <div id="hint" hidden></div>
+      <div id="inspector" class="card" hidden></div>
+      <div id="distSheet" class="card" hidden></div>
+    </section>
+  </div>
+
+  <nav id="mobileNav">
+    <button data-tab="lib">物品庫</button><button data-tab="room">房間</button><button data-tab="lay">擺法</button>
+  </nav>
+</div>
+<div id="modal" hidden></div>
+<div id="toast"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
