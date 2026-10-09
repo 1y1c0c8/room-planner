@@ -1,9 +1,9 @@
 // 3D 檢視：環繞（看整體）與走動（第一人稱）。只負責「看」，擺放在 2D 做。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js?v=0.6.2';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom } from './geom.js?v=0.6.2';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.6.2';
+import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js?v=0.6.3';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom } from './geom.js?v=0.6.3';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.6.3';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -435,12 +435,20 @@ export class View3D {
     const img = d.tex ? getImg(d.tex) : null;
     // 貼皮以房內看到的為準；門外側那一面是水平反轉的
     const inner = img ? new THREE.MeshStandardMaterial({ map: this.baseTex(d.tex, img), roughness: 0.6 }) : edge;
+    // 門外側：mirror＝房內照片左右反轉（預設）、same＝不反轉、photo＝另外上傳的照片
+    const mode = d.skinOut || 'mirror';
     let outer = edge;
-    if (img) {
+    if (inner !== edge) this.disposables.push(inner);
+    if (mode === 'photo') {
+      const imgOut = d.texOut ? getImg(d.texOut) : null;
+      if (imgOut) { outer = new THREE.MeshStandardMaterial({ map: this.baseTex(d.texOut, imgOut), roughness: 0.6 }); this.disposables.push(outer); }
+    } else if (img && mode === 'same') {
+      outer = inner;
+    } else if (img) {
       const flip = this.baseTex(d.tex, img).clone();
       flip.wrapS = THREE.RepeatWrapping; flip.repeat.x = -1; flip.offset.x = 1; flip.needsUpdate = true;
       outer = new THREE.MeshStandardMaterial({ map: flip, roughness: 0.6 });
-      this.disposables.push(flip, inner, outer);
+      this.disposables.push(flip, outer);
     }
     this.disposables.push(edge);
     // 轉軸座標系：local x＝從轉軸往關門方向；房內那一面是 local z 的 side 方向（box 的第 4 面＝+z、第 5 面＝-z）

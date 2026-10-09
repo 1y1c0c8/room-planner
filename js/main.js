@@ -1,14 +1,14 @@
 // 介面：側欄（物品庫/房間/擺法）、檢視器、距離輸入、各種對話框
 import {
   S, on, emit, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, undo, redo, histState,
-  loadAll, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
+  loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.6.2';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.6.2';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH } from './geom.js?v=0.6.2';
-import { Plan2D } from './plan2d.js?v=0.6.2';
-import { rectify } from './rectify.js?v=0.6.2';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.6.2';
+} from './state.js?v=0.6.3';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.6.3';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH } from './geom.js?v=0.6.3';
+import { Plan2D } from './plan2d.js?v=0.6.3';
+import { rectify } from './rectify.js?v=0.6.3';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.6.3';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -573,7 +573,13 @@ function renderRoom() {
             <label>門框顏色<input data-k="dr${d.id}" data-dk="frameColor" type="color" value="${esc(d.frameColor || '#8b7b6b')}"></label>
             <div class="texrow span2">${d.tex && getImg(d.tex) ? `<img src="${getImg(d.tex).src}" class="texprev">` : '<div class="texprev empty">門片貼皮</div>'}
               <div class="col"><label class="btn">${d.tex ? '換貼皮照片' : '上傳貼皮照片'}<input type="file" accept="image/*" hidden data-doorskin="${d.id}"></label>
-              ${d.tex ? `<button data-doorskindel="${d.id}" class="danger">移除貼皮</button>` : ''}</div></div>`)).join('')}
+              ${d.tex ? `<button data-doorskindel="${d.id}" class="danger">移除貼皮</button>` : ''}</div></div>
+            <label class="span2">門外側的貼皮<select data-k="dx${d.id}" data-dk="skinOut">
+              <option value="mirror" ${(d.skinOut || 'mirror') === 'mirror' ? 'selected' : ''}>房內照片水平反轉</option>
+              <option value="same" ${d.skinOut === 'same' ? 'selected' : ''}>房內照片不反轉</option>
+              <option value="photo" ${d.skinOut === 'photo' ? 'selected' : ''}>另外上傳一張</option></select></label>
+            ${d.skinOut === 'photo' ? `<div class="texrow span2">${d.texOut && getImg(d.texOut) ? `<img src="${getImg(d.texOut).src}" class="texprev">` : '<div class="texprev empty">門外側貼皮</div>'}
+              <div class="col"><label class="btn">${d.texOut ? '換門外側照片' : '上傳門外側照片'}<input type="file" accept="image/*" hidden data-doorskinout="${d.id}"></label></div></div>` : ''}`)).join('')}
         <button data-adddoor>＋ 新增門</button>
 
         <div class="lbl">窗戶</div>
@@ -724,7 +730,7 @@ $('#tab-room').addEventListener('change', async e => {
       const d = r.doors.find(x => x.id === id);
       if (dk === 'name') d.name = t.value.trim();
       else if (dk === 'wall') d.wall = +t.value;
-      else if (dk === 'hinge' || dk === 'swing' || dk === 'leafColor' || dk === 'frameColor') d[dk] = t.value;
+      else if (dk === 'hinge' || dk === 'swing' || dk === 'leafColor' || dk === 'frameColor' || dk === 'skinOut') d[dk] = t.value;
       else if (dk === 'open') { const v = parseFloat(t.value); if (Number.isFinite(v)) d.open = Math.max(0, Math.min(180, v)); }
       else { const v = toMM(t.value); if (v >= 0) d[dk] = v; }
     }, false);
@@ -843,15 +849,16 @@ $('#tab-room').addEventListener('click', async e => {
 });
 
 $('#tab-room').addEventListener('change', async e => {
-  const did = e.target.dataset.doorskin;
+  const did = e.target.dataset.doorskin || e.target.dataset.doorskinout;
   if (!did) return;
+  const outside = !!e.target.dataset.doorskinout, key = outside ? 'texOut' : 'tex';
   const file = e.target.files[0], d = P().room.doors.find(x => x.id === did);
   if (!file || !d) return;
   const lw = Math.max(50, d.w - 2 * doorFrame(d)), lh = doorLeafH(d);
-  const blob = await rectify(file, { aspect: lw / lh, title: `校正${nm(d, '門')}的門片照片`, orient: '以正面看過去的方向為準，只框門片、不含門框' });
+  const blob = await rectify(file, { aspect: lw / lh, title: `校正${nm(d, '門')}${outside ? '門外側' : ''}的門片照片`, orient: outside ? '站在門外、正面看過去的方向，只框門片' : '站在房內、正面看過去的方向，只框門片、不含門框' });
   if (!blob) return;
-  const id = await putImage(blob), old = d.tex;
-  roomChange(() => { d.tex = id; }, false);
+  const id = await putImage(blob), old = d[key];
+  roomChange(() => { d[key] = id; }, false);
   if (old) delImage(old);
 });
 $('#tab-room').addEventListener('change', async e => {
@@ -1056,7 +1063,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.6.2・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.6.3・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1123,7 +1130,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.6.2');
+        const { View3D } = await import('./view3d.js?v=0.6.3');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), { onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; } });
         v3d.bindJoystick($('#joy'));
@@ -1258,7 +1265,27 @@ on(what => {
 
 
 // ---------- 啟動 ----------
+// ---------- 版本檢查 ----------
+const APP_VERSION = '0.6.3';
+let lastCheck = 0;
+async function checkUpdate() {
+  if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;
+  lastCheck = Date.now();
+  try {
+    const j = await (await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+    if (!j.v || j.v === APP_VERSION) return;
+    const key = 'rp-reloaded-' + j.v;
+    if (sessionStorage.getItem(key)) return; // 避免重整迴圈
+    sessionStorage.setItem(key, '1');
+    await flushSaves();
+    location.replace(`${location.pathname}?r=${Date.now()}`); // 換網址＝不用快取的 index.html
+  } catch { /* 離線就算了 */ }
+}
+if (location.search.includes('r=')) history.replaceState(null, '', location.pathname);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+
 (async function start() {
+  checkUpdate();
   await loadAll();
   plan = new Plan2D($('#c2d'), ui);
   window.__rp = { plan, get v3d() { return v3d; } }; // 除錯用

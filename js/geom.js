@@ -1,5 +1,5 @@
 // 幾何：房間多邊形、牆、門、物件的邊，以及「可作為距離基準的邊」
-import { V, polyArea } from './util.js?v=0.6.2';
+import { V, polyArea } from './util.js?v=0.6.3';
 
 export const WALL_T = 100; // 2D 顯示用的牆厚（mm）
 

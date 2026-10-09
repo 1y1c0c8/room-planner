@@ -1,7 +1,7 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
-import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit } from './state.js?v=0.6.2';
-import { V, segDist, cm, clamp } from './util.js?v=0.6.2';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.6.2';
+import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit } from './state.js?v=0.6.3';
+import { V, segDist, cm, clamp } from './util.js?v=0.6.3';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.6.3';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
