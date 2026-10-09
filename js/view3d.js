@@ -56,8 +56,11 @@ export class View3D {
     this.controls.enableDamping = true;
     this.controls.maxPolarAngle = Math.PI * 0.49;
 
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8f7f6a, 1.2));
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x8f7f6a, 1.2);
+    this.amb = new THREE.AmbientLight(0xffffff, 0.25);
+    this.scene.add(this.hemi, this.amb);
+    this.sunState = null; // 日照模式：{ d:{x,y} 朝太陽的水平方向, alt 仰角（度） }
+    this.casters = [];    // 日照模式時要擋光的牆與天花板
     const sun = (this.sun = new THREE.DirectionalLight(0xfff3e2, 1.5));
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -178,6 +181,7 @@ export class View3D {
     this.disposables.push(ceilMat);
     const ceil = new THREE.Mesh(planar(contour, (u, v) => [u * M, H * M, v * M], new THREE.Vector3(0, -1, 0)), ceilMat);
     this.group.add(ceil);
+    this.casters = [ceil];
 
     // 牆：單面朝內的平面，從外面看會自動透明（像娃娃屋）
     const wallMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(room.wallColor), roughness: 0.92 });
@@ -205,6 +209,7 @@ export class View3D {
       const mesh = new THREE.Mesh(planar(dedupe(c), map, new THREE.Vector3(w.n.x, 0, w.n.y), [M, M], holes), wallMat);
       mesh.receiveShadow = true;
       this.group.add(mesh);
+      this.casters.push(mesh);
       // 牆頂壓條：讓俯視時看得出牆的輪廓
       const cap = new THREE.Mesh(new THREE.BoxGeometry(w.len * M + 0.1, 0.03, 0.1), capMat);
       const mid = V.add(w.mid, V.scale(w.n, -50));
@@ -275,8 +280,42 @@ export class View3D {
     this.sun.position.set(b.cx + 2.5, 8, b.cz + 1.5);
     this.sun.target.position.set(b.cx, 0, b.cz);
 
+    this.roomH = H * M;
+    this.applySun();
     if (!this.framed) { this.frame(); this.framed = true; }
     if (this.mode === 'walk' && !this.free(this.px, this.pz)) this.placeWalker();
+  }
+
+  setSun(s) { this.sunState = s; this.applySun(); }
+
+  // 日照模式：牆與天花板擋光，平行光依太陽方位照進窗戶；一般模式：柔和的頂光
+  applySun() {
+    const b = this.bounds;
+    if (!b) return;
+    const s = this.sunState, sc = this.sun.shadow.camera;
+    for (const m of this.casters) m.castShadow = !!s;
+    if (s) {
+      const up = s.alt > 0;
+      const a = (Math.max(s.alt, 1) * Math.PI) / 180;
+      const dir = new THREE.Vector3(s.d.x * Math.cos(a), Math.sin(a), s.d.y * Math.cos(a));
+      this.sun.position.set(b.cx, 0, b.cz).addScaledVector(dir, 20);
+      this.sun.intensity = up ? 3.2 : 0;
+      this.sun.color.set(s.alt < 12 ? 0xffc98a : 0xfff1dc); // 低角度的陽光偏暖
+      this.hemi.intensity = up ? 0.55 : 0.25;
+      this.amb.intensity = 0.12;
+      const r = Math.max(b.sx, b.sz) / 2 + (this.roomH || 2.6) + 1.5;
+      Object.assign(sc, { left: -r, right: r, top: r, bottom: -r, near: 0.5, far: 45 });
+    } else {
+      this.sun.position.set(b.cx + 2.5, 8, b.cz + 1.5);
+      this.sun.intensity = 1.5;
+      this.sun.color.set(0xfff3e2);
+      this.hemi.intensity = 1.2;
+      this.amb.intensity = 0.25;
+      const r = Math.max(b.sx, b.sz) / 2 + 1;
+      Object.assign(sc, { left: -r, right: r, top: r, bottom: -r, near: 0.1, far: 30 });
+    }
+    sc.updateProjectionMatrix();
+    this.sun.target.position.set(b.cx, 0, b.cz);
   }
 
   makeItem(it, li, rugIdx) {

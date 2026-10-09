@@ -8,6 +8,7 @@ import { uid, cm, toMM, esc, normDeg } from './util.js';
 import { buildRoom, wallEdges, cornerName } from './geom.js';
 import { Plan2D } from './plan2d.js';
 import { rectify } from './rectify.js';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -43,7 +44,7 @@ function updateHint() {
   else if (!L()?.items.length) t = '從左側「物品庫」新增物品，再放進這個空間';
   else t = matchMedia('(pointer: coarse)').matches ? '點選物件開始調整・點牆可看牆面（掛畫、窗戶）・雙指縮放' : '點選物件開始調整・點牆可看牆面（掛畫、窗戶）・滾輪或觸控板縮放';
   h.textContent = t;
-  h.hidden = !t;
+  h.hidden = !t || sun.on;
 }
 
 function modal(title, html, { wide } = {}) {
@@ -483,7 +484,16 @@ function renderRoom() {
           </div>
         </div>
         ${r.floorTex ? `<label>框選區域實際寬（cm）<input data-k="floorTile" type="number" inputmode="decimal" step="0.1" value="${cm(r.floorTile)}"></label>` : ''}
-        <p class="mute small">日光模式（四季光照）之後會用到：房間朝向、窗戶、經緯度。現在可以先不填。</p>
+        <div class="lbl">方位與位置（日照用）</div>
+        <label>座標（緯度, 經度）<input data-k="latlng" placeholder="例如 22.9971, 120.2170" value="${r.lat != null ? `${r.lat}, ${r.lng}` : ''}"></label>
+        <div class="btns"><button data-geo>📍 使用目前位置</button></div>
+        <p class="mute small">也可以在 Google 地圖對著你家按右鍵，點第一行的座標就會複製，貼到上面。座標只存在這台裝置。</p>
+        <label>時區（UTC＋）<input data-k="tz" type="number" step="0.5" value="${r.tz ?? -new Date().getTimezoneOffset() / 60}"></label>
+        <div class="lbl">北方在平面圖的哪個方向</div>
+        <div class="seg" data-k="northSeg">${[[0, '上'], [90, '右'], [180, '下'], [270, '左']].map(([v, l]) => `<button data-north="${v}" class="${(r.north || 0) === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <label>精確角度（°，從平面圖上方順時針量）<input data-k="north" type="number" inputmode="decimal" step="0.5" value="${r.north || 0}"></label>
+        ${'DeviceOrientationEvent' in window && matchMedia('(pointer: coarse)').matches ? '<button data-compass>🧭 用手機指南針量</button>' : ''}
+        <p class="mute small">指南針量法：站在房間裡<b>面向牆 1</b>（平面圖的上方），手機平放、頂端朝前，按下按鈕。左下角的指北針會跟著更新。</p>
       </div>`;
   });
 }
@@ -495,6 +505,15 @@ $('#tab-room').addEventListener('change', async e => {
   if (k === 'rw' || k === 'rd') { const v = toMM(t.value); if (v > 0) roomChange(r => { r[k === 'rw' ? 'w' : 'd'] = v; }); return; }
   if (k === 'height') { const v = toMM(t.value); if (v > 0) roomChange(r => { r.height = v; }, false); return; }
   if (k === 'wallColor' || k === 'floorColor') { roomChange(r => { r[k] = t.value; }, false); return; }
+  if (k === 'latlng') {
+    const m = t.value.match(/(-?\d+(?:\.\d+)?)\s*[,，\s]\s*(-?\d+(?:\.\d+)?)/);
+    if (!t.value.trim()) { roomChange(r => { r.lat = r.lng = null; }, false); return; }
+    if (!m || Math.abs(+m[1]) > 90 || Math.abs(+m[2]) > 180) { toast('格式像這樣：22.9971, 120.2170'); return; }
+    roomChange(r => { r.lat = +(+m[1]).toFixed(5); r.lng = +(+m[2]).toFixed(5); if (r.tz == null) r.tz = -new Date().getTimezoneOffset() / 60; }, false);
+    return;
+  }
+  if (k === 'tz') { const v = parseFloat(t.value); if (Number.isFinite(v)) roomChange(r => { r.tz = v; }, false); return; }
+  if (k === 'north') { const v = parseFloat(t.value); if (Number.isFinite(v)) roomChange(r => { r.north = normDeg(v); }, false); return; }
   if (k === 'floorTile') { const v = toMM(t.value); if (v > 0) roomChange(r => { r.floorTile = v; }, false); return; }
   if (t.classList.contains('wlen')) { const v = toMM(t.value); if (v > 0) roomChange(r => { r.walls[+t.dataset.i].len = v; }); return; }
   if (t.classList.contains('wturn')) {
@@ -570,6 +589,17 @@ $('#tab-room').addEventListener('click', async e => {
   }
   if (b.dataset.delwin) { roomChange(r => { r.windows = r.windows.filter(w => w.id !== b.dataset.delwin); }, false); return; }
   if (b.dataset.deldoor) { roomChange(r => { r.doors = r.doors.filter(d => d.id !== b.dataset.deldoor); }, false); return; }
+  if (b.dataset.north != null) { roomChange(r => { r.north = +b.dataset.north; }, false); return; }
+  if (b.hasAttribute('data-geo')) {
+    if (!navigator.geolocation) { toast('這個瀏覽器不支援定位'); return; }
+    toast('定位中…（瀏覽器會詢問是否允許）');
+    navigator.geolocation.getCurrentPosition(
+      pos => roomChange(r => { r.lat = +pos.coords.latitude.toFixed(5); r.lng = +pos.coords.longitude.toFixed(5); r.tz = -new Date().getTimezoneOffset() / 60; }, false),
+      err => toast('無法取得位置：' + (err.code === 1 ? '被拒絕了，可以改用貼上座標' : err.message)),
+      { enableHighAccuracy: true, timeout: 15000 });
+    return;
+  }
+  if (b.hasAttribute('data-compass')) { readCompass(); return; }
   if (b.hasAttribute('data-floordel')) { const old = p.room.floorTex; roomChange(r => { r.floorTex = null; }, false); delImage(old); }
 });
 
@@ -585,6 +615,85 @@ $('#tab-room').addEventListener('change', async e => {
   if (old) delImage(old);
   toast('框選區域的實際寬度可在下方調整');
 });
+
+// ---------- 指南針 ----------
+async function readCompass() {
+  try {
+    if (typeof DeviceOrientationEvent?.requestPermission === 'function' && (await DeviceOrientationEvent.requestPermission()) !== 'granted') { toast('需要允許使用動作與方向感測'); return; }
+  } catch { toast('需要允許使用動作與方向感測'); return; }
+  const vals = [];
+  const onEv = e => {
+    const h = e.webkitCompassHeading ?? (e.absolute && e.alpha != null ? 360 - e.alpha : null);
+    if (h != null) vals.push(h);
+  };
+  window.addEventListener('deviceorientation', onEv);
+  window.addEventListener('deviceorientationabsolute', onEv);
+  toast('讀取中，手機請保持平放不動…');
+  await new Promise(r => setTimeout(r, 1500));
+  window.removeEventListener('deviceorientation', onEv);
+  window.removeEventListener('deviceorientationabsolute', onEv);
+  if (!vals.length) { toast('讀不到指南針，請改用手動輸入角度'); return; }
+  // 角度平均要用向量，避免 359° 和 1° 平均成 180°
+  const x = vals.reduce((s, v) => s + Math.cos((v * Math.PI) / 180), 0), y = vals.reduce((s, v) => s + Math.sin((v * Math.PI) / 180), 0);
+  const heading = normDeg((Math.atan2(y, x) * 180) / Math.PI);
+  roomChange(r => { r.north = +normDeg(360 - heading).toFixed(1); }, false);
+  toast(`平面圖上方朝 ${bearingName(heading)}（${heading.toFixed(0)}°），已更新北方`);
+}
+
+// ---------- 日照 ----------
+const sun = { on: false, doy: doyOf(new Date()), min: Math.round((new Date().getHours() * 60 + new Date().getMinutes()) / 5) * 5, timer: null };
+function applySun() {
+  const r = P()?.room;
+  document.querySelectorAll('[data-sun]').forEach(b => b.classList.toggle('on', sun.on));
+  $('#sunBar').hidden = !sun.on;
+  if (!sun.on || !r || r.lat == null) { plan.sun = null; v3d?.setSun(null); plan.draw(); updateHint(); return; }
+  const year = new Date().getFullYear(), tz = r.tz ?? 8;
+  const pos = sunPos(localDate(year, sun.doy, sun.min, tz), r.lat, r.lng);
+  const d = sunDir2(pos.bearing, r.north || 0);
+  plan.sun = { d, alt: pos.alt };
+  v3d?.setSun({ d, alt: pos.alt });
+  plan.draw();
+  const info = dayInfo(year, sun.doy, r.lat, r.lng, tz);
+  $('#sunDay').value = sun.doy; $('#sunTime').value = sun.min;
+  $('#sunDayVal').textContent = mdOf(year, sun.doy);
+  $('#sunTimeVal').textContent = hm(sun.min);
+  const lit = (r.windows || []).length ? '' : '・還沒有窗戶，到「房間」新增後才看得到陽光照進來';
+  $('#sunInfo').textContent = pos.alt > 0
+    ? `太陽在${bearingName(pos.bearing)}方（${pos.bearing.toFixed(0)}°），仰角 ${pos.alt.toFixed(0)}°・日出 ${hm(info.rise)}、日落 ${hm(info.set)}${lit}`
+    : `太陽在地平線下・日出 ${info.rise != null ? hm(info.rise) : '—'}、日落 ${info.set != null ? hm(info.set) : '—'}`;
+  $('#hint').hidden = true;
+}
+function toggleSun() {
+  if (!sun.on && P()?.room.lat == null) {
+    toast('先在「房間」分頁設定座標與北方');
+    isMobile() ? openSheet('room') : setTab('room');
+    return;
+  }
+  sun.on = !sun.on;
+  if (!sun.on) stopPlay();
+  applySun();
+}
+function stopPlay() { clearInterval(sun.timer); sun.timer = null; $('#sunPlay').textContent = '▶'; }
+document.querySelectorAll('[data-sun]').forEach(b => { b.onclick = toggleSun; });
+$('#sunDay').oninput = e => { sun.doy = +e.target.value; applySun(); };
+$('#sunTime').oninput = e => { sun.min = +e.target.value; applySun(); };
+$('#sunBar .sunpre').onclick = e => {
+  const d = e.target.closest('button')?.dataset.d;
+  if (!d) return;
+  sun.doy = d === 'today' ? doyOf(new Date()) : +d;
+  applySun();
+};
+$('#sunPlay').onclick = () => {
+  if (sun.timer) return stopPlay();
+  const r = P().room, info = dayInfo(new Date().getFullYear(), sun.doy, r.lat, r.lng, r.tz ?? 8);
+  if (sun.min < (info.rise ?? 0) || sun.min >= (info.set ?? 1440)) sun.min = Math.floor((info.rise ?? 360) / 5) * 5;
+  $('#sunPlay').textContent = '❚❚';
+  sun.timer = setInterval(() => {
+    sun.min += 5;
+    if (sun.min >= (info.set ?? 1440)) { stopPlay(); return; }
+    applySun();
+  }, 60);
+};
 
 // ---------- 擺法方案 ----------
 function renderLay() {
@@ -686,11 +795,12 @@ function openMenu() {
       <li><b>精確距離</b>：選取物件 → 點它的一條邊 → 點另一條邊（牆、門框、其他物件）→ 輸入距離。不平行的話會自動轉正。</li>
       <li><b>鎖定</b>：鎖住的物件不會被拖動，但可以當距離基準。</li>
       <li><b>牆面（掛畫、窗戶）</b>：在平面圖點一面牆（或牆名標籤），切到牆面視圖。可以拖曳畫和窗戶，也能用「點邊 → 點基準邊」對齊天花板、門框、傢俱頂面或其他畫。</li>
+      <li><b>日照</b>：先在「房間」分頁設定座標和北方，再按「☀️ 日照」。拖日期和時間（或按 ▶ 播放一天），2D 會畫出陽光落在地板上的範圍（虛線＝被傢俱擋住的部分），3D 會模擬陽光從窗戶照進來。目前還沒計入周邊建物遮擋。</li>
       <li><b>量測線</b>：切到「量測線」模式，點兩條平行的邊，就會一直顯示它們之間的距離。</li>
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.2・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.3・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -761,6 +871,7 @@ async function setView(v) {
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), { onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; } });
         v3d.bindJoystick($('#joy'));
+        if (sun.on) applySun();
       } catch (err) {
         $('#v3d').innerHTML = `<div class="loading">3D 載入失敗（需要網路）：${esc(err.message)}</div>`;
         return;
@@ -883,6 +994,7 @@ on(what => {
   if (what === 'projects') renderTitle();
   if (what === 'history') { const h = histState(); $('#btnUndo').disabled = !h.u; $('#btnRedo').disabled = !h.r; }
   if (v3d && ['project', 'library', 'images', 'switch', 'settings'].includes(what)) v3d.markDirty();
+  if ((what === 'project' || what === 'switch') && sun.on) applySun();
   updateHint();
 });
 

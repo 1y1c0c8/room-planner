@@ -151,7 +151,9 @@ export class Plan2D {
     const sel = selItem();
     const selRug = sel && isRug(lib(sel.libId));
     for (const it of items) if (isRug(lib(it.libId))) this.drawItem(ctx, it, 1);
+    if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D);
     for (const it of items) if (!isRug(lib(it.libId))) this.drawItem(ctx, it, selRug ? 0.4 : 1);
+    if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D, true); // 傢俱上再描一次外框，看得出被蓋住的範圍
     // 門扇與開門範圍畫在物件上面，才看得出會不會撞到
     for (const d of p.room.doors || []) {
       const g = doorGeom(d, walls);
@@ -174,11 +176,63 @@ export class Plan2D {
 
     this.drawWallLabels(ctx, D);
     this.drawItemLabels(ctx, items);
+    this.drawCompass(ctx, p.room);
     this.drawMeasures(ctx, D);
     if (sel) this.drawSelection(ctx, sel, D);
     if (this.pick) this.drawPick(ctx, D);
     if (this.mode === 'measure') this.drawMeasurePick(ctx, D);
     for (const r of this.snapHits) this.seg(ctx, r.a, r.b, C.hot, 3);
+  }
+
+  // 陽光穿過窗戶落在地板上的範圍（不計傢俱遮擋；照到牆上的部分不畫）
+  drawSunPatches(ctx, D, outline = false) {
+    const { d, alt } = this.sun;
+    const cot = 1 / Math.tan((alt * Math.PI) / 180);
+    const H = D.p.room.height;
+    ctx.save();
+    this.polyPath(ctx, D.poly);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(255, 205, 70, .42)';
+    ctx.strokeStyle = 'rgba(230, 160, 20, .8)';
+    ctx.lineWidth = 1.2 / this.scale;
+    for (const w of D.p.room.windows || []) {
+      const W = D.walls[w.wall];
+      if (!W || V.dot(d, W.n) >= 0) continue; // 太陽在牆的室內側＝照不進這扇窗
+      const lo = Math.max(0, w.sill), hi = Math.min(H, w.sill + w.h);
+      if (hi <= lo) continue;
+      const P = (t, z) => V.sub(V.add(W.a, V.scale(W.u, t)), V.scale(d, z * cot));
+      const q = [P(w.off, lo), P(w.off + w.w, lo), P(w.off + w.w, hi), P(w.off, hi)];
+      ctx.beginPath(); q.forEach((pt, i) => (i ? ctx.lineTo(pt.x, pt.y) : ctx.moveTo(pt.x, pt.y))); ctx.closePath();
+      if (outline) { ctx.setLineDash([6 / this.scale, 4 / this.scale]); ctx.stroke(); ctx.setLineDash([]); }
+      else { ctx.fill(); ctx.stroke(); }
+    }
+    ctx.restore();
+  }
+
+  // 指北針（日照模式時加上太陽方向）
+  drawCompass(ctx, room) {
+    const cx = 44, cy = this.h - 44, r = 24;
+    const t = ((room.north || 0) * Math.PI) / 180;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,253,249,.92)'; ctx.fill();
+    ctx.strokeStyle = '#d6cfc4'; ctx.lineWidth = 1; ctx.stroke();
+    const dir = (ang, len) => ({ x: cx + Math.sin(ang) * len, y: cy - Math.cos(ang) * len });
+    const tip = dir(t, r - 5), tail = dir(t + Math.PI, r - 9), l = dir(t - Math.PI / 2, 5), rr = dir(t + Math.PI / 2, 5);
+    ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(l.x, l.y); ctx.lineTo(rr.x, rr.y); ctx.closePath();
+    ctx.fillStyle = '#c4572a'; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(tail.x, tail.y); ctx.lineTo(l.x, l.y); ctx.lineTo(rr.x, rr.y); ctx.closePath();
+    ctx.fillStyle = '#9a9086'; ctx.fill();
+    const n = dir(t, r + 9);
+    ctx.font = '700 11px -apple-system, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#c4572a'; ctx.fillText('N', n.x, n.y);
+    if (this.sun) {
+      const sp = { x: cx + this.sun.d.x * (r + 10), y: cy + this.sun.d.y * (r + 10) };
+      ctx.font = '14px sans-serif';
+      ctx.globalAlpha = this.sun.alt > 0 ? 1 : 0.35;
+      ctx.fillText('☀️', sp.x, sp.y);
+    }
+    ctx.restore();
   }
 
   // 平面圖上的窗戶（牆上的玻璃符號）與牆面物件（貼牆的細條）

@@ -68,6 +68,16 @@ header#top {
 .eye { display: inline-flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px 10px; font-size: 13px; }
 .eye input { width: 120px; accent-color: var(--accent); }
 .etitle { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 5px 12px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.sunbtn.on { background: #fff3d1; border-color: #f0cf7a; color: #8a5a00; }
+#sunBar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(520px, calc(100% - 24px)); z-index: 7; padding: 10px 14px; }
+.sunrow { display: flex; align-items: center; gap: 10px; }
+.sunrow input[type=range] { flex: 1; accent-color: #e0a21c; padding: 0; border: 0; background: transparent; }
+.sunrow b { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+.sunrow button { padding: 3px 10px; }
+.slbl { color: var(--mute); font-size: 12.5px; width: 28px; }
+.sunpre { display: flex; gap: 4px; margin: 4px 0 6px 38px; flex-wrap: wrap; }
+.sunpre button { font-size: 12px; padding: 2px 8px; }
+#sunInfo { margin-top: 4px; }
 #walkHelp { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); background: rgba(43,40,36,.82); color: #fff; padding: 7px 14px; border-radius: 999px; font-size: 12.5px; pointer-events: none; white-space: nowrap; }
 #joy { position: absolute; left: 24px; bottom: calc(28px + env(safe-area-inset-bottom)); width: 120px; height: 120px; border-radius: 50%; background: rgba(255,255,255,.35); border: 2px solid rgba(255,255,255,.7); touch-action: none; display: grid; place-items: center; z-index: 6; }
 #joy .knob { width: 52px; height: 52px; border-radius: 50%; background: rgba(47,125,118,.85); pointer-events: none; }
@@ -190,6 +200,7 @@ ul.help li { margin-bottom: 4px; }
   #inspector .tip { display: none; }
   #hint { bottom: auto; top: 54px; font-size: 12px; }
   .etitle { font-size: 13px; }
+  #sunBar { bottom: auto; top: 96px; }
   .float { left: 8px; top: 8px; right: 8px; }
   #distSheet { bottom: 8px; }
   .proj { max-width: 40vw; }

@@ -52,16 +52,24 @@
         <span id="elevTitle" class="etitle" hidden></span>
         <div class="seg" id="modeSeg"><button data-m="select" class="on">選取</button><button data-m="measure">量測線</button></div>
         <span class="zoom"><button id="zoomOut" title="縮小">－</button><button id="zoomIn" title="放大">＋</button><button id="zoomFit" title="顯示整個房間">全覽</button></span>
+        <button class="sunbtn" data-sun>☀️ 日照</button>
       </div>
       <div id="tools3d" class="float" hidden>
         <div class="seg" id="camSeg"><button data-m="orbit" class="on">環繞</button><button data-m="walk">走動</button></div>
         <label id="eyeBox" class="eye" hidden>眼高<input type="range" id="eye" min="30" max="210" step="1"><span id="eyeVal"></span></label>
         <button id="btnPLock" hidden>滑鼠鎖定</button>
+        <button class="sunbtn" data-sun>☀️ 日照</button>
       </div>
       <div id="walkHelp" hidden></div>
       <div id="joy" hidden><div class="knob"></div></div>
 
       <div id="hint" hidden></div>
+      <div id="sunBar" class="card" hidden>
+        <div class="sunrow"><span class="slbl">日期</span><input type="range" id="sunDay" min="1" max="365"><b id="sunDayVal"></b></div>
+        <div class="sunpre"><button data-d="80">春分</button><button data-d="172">夏至</button><button data-d="266">秋分</button><button data-d="355">冬至</button><button data-d="today">今天</button></div>
+        <div class="sunrow"><span class="slbl">時間</span><input type="range" id="sunTime" min="0" max="1435" step="5"><b id="sunTimeVal"></b><button id="sunPlay" title="播放一天">▶</button></div>
+        <div id="sunInfo" class="mute small"></div>
+      </div>
       <div id="inspector" class="card" hidden></div>
       <div id="distSheet" class="card" hidden></div>
     </section>
