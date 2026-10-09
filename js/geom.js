@@ -84,7 +84,7 @@ export function doorGeom(door, walls) {
   };
 }
 
-export const refKey = r => (r.k === 'wall' ? `wall:${r.i}` : r.k === 'door' ? `door:${r.id}:${r.s}` : `item:${r.id}:${r.e}`);
+export const refKey = r => (r.k === 'wall' ? `wall:${r.i}` : r.k === 'door' ? `door:${r.id}:${r.s}` : `${r.k}:${r.id}:${r.e}`);
 
 // 所有可被選為距離基準的邊
 export function refEdges(p, lay, libFn, walls) {
@@ -100,6 +100,15 @@ export function refEdges(p, lay, libFn, walls) {
       const a = V.add(pt, V.scale(g.n, -WALL_T)), b = V.add(pt, V.scale(g.n, 200));
       out.push({ ref: { k: 'door', id: d.id, s }, kind: 'door', a, b, u: g.n, n: nn, len: WALL_T + 200, mid: V.mid(a, b), label: `門 ${j + 1} 的門框` });
     });
+  });
+  (p.room.boxes || []).forEach((bx, j) => {
+    const W = walls[bx.wall];
+    if (!W) return;
+    const at = t => V.add(W.a, V.scale(W.u, t)), fr = t => V.add(at(t), V.scale(W.n, bx.depth));
+    const t0 = bx.off, t1 = bx.off + bx.w, label = `量體 ${j + 1}`;
+    out.push({ ref: { k: 'box', id: bx.id, e: 0 }, kind: 'box', a: fr(t0), b: fr(t1), u: W.u, n: W.n, len: bx.w, mid: fr((t0 + t1) / 2), label: `${label} 前緣` });
+    out.push({ ref: { k: 'box', id: bx.id, e: 1 }, kind: 'box', a: at(t0), b: fr(t0), u: W.n, n: V.scale(W.u, -1), len: bx.depth, mid: V.mid(at(t0), fr(t0)), label: `${label} 側邊` });
+    out.push({ ref: { k: 'box', id: bx.id, e: 2 }, kind: 'box', a: at(t1), b: fr(t1), u: W.n, n: W.u, len: bx.depth, mid: V.mid(at(t1), fr(t1)), label: `${label} 側邊` });
   });
   for (const it of lay.items) {
     const li = libFn(it.libId);
@@ -123,4 +132,22 @@ export function measureGeom(e1, e2) {
   const p1 = V.add(e1.a, V.scale(e1.u, t));
   const s = V.dot(V.sub(p1, e2.a), e2.n);
   return { p1, p2: V.sub(p1, V.scale(e2.n, s)), dist: Math.abs(s) };
+}
+
+// ---------- v0.4：內外牆、牆面量體、窗戶所在面 ----------
+export const isInterior = (room, i) => (room.interior || []).includes(i);
+
+// 牆面量體（貼牆凸出的箱體，例如舊冷氣窗台）：t0..t1 沿牆、z0..z1 高度、depth 往房內凸出
+export function boxGeom(b, walls, H) {
+  const W = walls[b.wall];
+  if (!W) return null;
+  const z1 = b.toCeil ? H : Math.min(H, b.bottom + b.h);
+  return { W, t0: b.off, t1: b.off + b.w, z0: b.bottom, z1, depth: b.depth };
+}
+
+// 窗戶所在平面離牆面多遠（開在量體正面時＝量體深度）
+export function winDepth(room, w) {
+  if (!w.host) return 0;
+  const b = (room.boxes || []).find(x => x.id === w.host);
+  return b ? b.depth : 0;
 }

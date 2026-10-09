@@ -41,9 +41,14 @@ export class Elev {
     const flip = V.dot(W.u, right) < 0;
     const X = t => (flip ? Lw - t : t);
     const objs = [];
+    (p.room.boxes || []).forEach((b, j) => {
+      if (b.wall !== this.wall) return;
+      const h = b.toCeil ? H - b.bottom : b.h;
+      objs.push({ kind: 'box', id: b.id, ref: b, x: X(b.off + b.w / 2), z: b.bottom + h / 2, w: b.w, h, locked: false, label: `量體 ${j + 1}` });
+    });
     (p.room.windows || []).forEach((w, j) => {
       if (w.wall !== this.wall) return;
-      objs.push({ kind: 'win', id: w.id, ref: w, x: X(w.off + w.w / 2), z: w.sill + w.h / 2, w: w.w, h: w.h, locked: false, label: `窗 ${j + 1}` });
+      objs.push({ kind: 'win', id: w.id, ref: w, x: X(w.off + w.w / 2), z: w.sill + w.h / 2, w: w.w, h: w.h, locked: false, label: `窗 ${j + 1}`, frosted: w.glass === 'frosted' });
     });
     for (const it of lay.items) {
       const li = lib(it.libId);
@@ -94,6 +99,10 @@ export class Elev {
   setPos(D, o, x, z) {
     const t = D.flip ? D.L - x : x;
     if (o.kind === 'art') { o.ref.off = Math.round(t * 10) / 10; o.ref.elev = Math.round(z * 10) / 10; }
+    else if (o.kind === 'box') {
+      o.ref.off = Math.round((t - o.ref.w / 2) * 10) / 10;
+      if (!o.ref.toCeil) o.ref.bottom = Math.round((z - o.ref.h / 2) * 10) / 10; // 頂到天花板的量體只能左右移
+    }
     else { o.ref.off = Math.round((t - o.ref.w / 2) * 10) / 10; o.ref.sill = Math.round((z - o.ref.h / 2) * 10) / 10; }
   }
 
@@ -182,8 +191,11 @@ export class Elev {
     // 窗戶、牆面物件
     for (const o of D.objs) {
       const r = this.rect(ctx, o.x - o.w / 2, o.z - o.h / 2, o.x + o.w / 2, o.z + o.h / 2);
-      if (o.kind === 'win') {
-        ctx.fillStyle = '#d4e6ee'; ctx.fill();
+      if (o.kind === 'box') {
+        ctx.fillStyle = 'rgba(90,80,70,.13)'; ctx.fill();
+        ctx.strokeStyle = '#6b5f52'; ctx.lineWidth = 1.5; ctx.stroke();
+      } else if (o.kind === 'win') {
+        ctx.fillStyle = o.frosted ? '#eef1ef' : '#d4e6ee'; ctx.fill();
         ctx.strokeStyle = '#6f858f'; ctx.lineWidth = 3; ctx.stroke();
         ctx.beginPath(); ctx.moveTo(r.x + r.w / 2, r.y); ctx.lineTo(r.x + r.w / 2, r.y + r.h);
         ctx.lineWidth = 1.5; ctx.stroke();
@@ -268,7 +280,8 @@ export class Elev {
   // ---------- 命中 ----------
   hitObj(w, D, pad = 0) {
     // 畫作優先於窗戶（畫可能掛在窗邊重疊）
-    const order = [...D.objs].sort((a, b) => (a.kind === 'art' ? 1 : 0) - (b.kind === 'art' ? 1 : 0)).reverse();
+    const rank = { box: 0, win: 1, art: 2 }; // 量體在最下層，窗和畫優先被點到
+    const order = [...D.objs].sort((a, b) => rank[b.kind] - rank[a.kind]);
     return order.find(o => Math.abs(w.x - o.x) <= o.w / 2 + pad && Math.abs(w.y - o.z) <= o.h / 2 + pad) || null;
   }
   hitOwnEdge(o, w, tol) {

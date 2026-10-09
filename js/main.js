@@ -5,7 +5,7 @@ import {
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
 } from './state.js';
 import { uid, cm, toMM, esc, normDeg } from './util.js';
-import { buildRoom, wallEdges, cornerName } from './geom.js';
+import { buildRoom, wallEdges, cornerName, isInterior } from './geom.js';
 import { Plan2D } from './plan2d.js';
 import { rectify } from './rectify.js';
 import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js';
@@ -13,6 +13,9 @@ import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } fro
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
 const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）', wall: '牆面物件（畫、海報、鏡子）' };
+const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
+const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>量體 ${j + 1} 正面（牆 ${b.wall + 1}）</option>`).join('');
+const glassOpts = w => `<option value="clear" ${w.glass !== 'frosted' ? 'selected' : ''}>透明</option><option value="frosted" ${w.glass === 'frosted' ? 'selected' : ''}>霧面（壓花）</option>`;
 const selWindow = () => { const p = P(); return p && S.sel ? (p.room.windows || []).find(w => w.id === S.sel) || null : null; };
 const wallsNow = () => wallEdges(buildRoom(P().room).poly);
 const wallName = (i, n) => `牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）`;
@@ -79,10 +82,16 @@ function renderWinInspector(box, win) {
       <label>高（cm）<input data-wk="h" type="number" inputmode="decimal" step="0.1" value="${cm(win.h)}"></label>
       <label>窗台高（cm）<input data-wk="sill" type="number" inputmode="decimal" step="0.1" value="${cm(win.sill)}"></label>
     </div>
+    <div class="grid2 form" style="margin-top:6px">
+      <label>開在<select data-wk="host">${hostOpts(p.room, win)}</select></label>
+      <label>玻璃<select data-wk="glass">${glassOpts(win)}</select></label>
+    </div>
     <div class="btns"><button data-a="delwin" class="danger">刪除窗戶</button></div>
     <p class="tip">點窗戶的<b>邊</b>，再點天花板、地板、牆角或門框，就能輸入精確距離。</p>`;
   box.onchange = e => {
-    const k = e.target.dataset.wk, v = toMM(e.target.value);
+    const k = e.target.dataset.wk;
+    if (k === 'host' || k === 'glass') { checkpoint(); setWinOpt(p.room, win, k, e.target.value); changed(); return; }
+    const v = toMM(e.target.value);
     if (!k || !(v >= 0)) return;
     checkpoint(); win[k] = v; changed();
   };
@@ -90,6 +99,56 @@ function renderWinInspector(box, win) {
     const a = e.target.closest('button')?.dataset.a;
     if (a === 'close') { S.sel = null; emit('selection'); }
     if (a === 'delwin') { checkpoint(); p.room.windows = p.room.windows.filter(w => w.id !== win.id); S.sel = null; changed(); emit('selection'); }
+  };
+}
+
+// 窗戶開在量體上時，牆號跟著量體
+function setWinOpt(room, win, k, v) {
+  if (k === 'glass') { win.glass = v; return; }
+  win.host = v || null;
+  const b = room.boxes.find(x => x.id === win.host);
+  if (b) { win.wall = b.wall; win.off = Math.max(b.off, Math.min(win.off, b.off + b.w - win.w)); }
+}
+
+function renderBoxInspector(box, bx) {
+  const p = P(), j = p.room.boxes.indexOf(bx), walls = wallsNow();
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="ihead"><div><b>量體 ${j + 1}</b><div class="mute small">${wallName(bx.wall, walls.length)}・貼牆凸出的箱體，屬於房間結構</div></div>
+      <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
+    <div class="grid3 form">
+      <label>寬（cm）<input data-bk="w" type="number" inputmode="decimal" step="0.1" value="${cm(bx.w)}"></label>
+      <label>凸出（cm）<input data-bk="depth" type="number" inputmode="decimal" step="0.1" value="${cm(bx.depth)}"></label>
+      <label>底離地（cm）<input data-bk="bottom" type="number" inputmode="decimal" step="0.1" value="${cm(bx.bottom)}"></label>
+    </div>
+    <label class="chk"><input type="checkbox" data-bk="toCeil" ${bx.toCeil ? 'checked' : ''}> 頂到天花板</label>
+    ${bx.toCeil ? '' : `<div class="form"><label>高（cm）<input data-bk="h" type="number" inputmode="decimal" step="0.1" value="${cm(bx.h)}"></label></div>`}
+    <div class="btns"><button data-a="addwin">在正面開窗</button><button data-a="delbox" class="danger">刪除量體</button></div>
+    <p class="tip">量體的邊可以當距離基準（例如書架頂端距量體底部）。${bx.toCeil ? '頂到天花板時只能左右移動。' : ''}</p>`;
+  box.onchange = e => {
+    const k = e.target.dataset.bk;
+    if (!k) return;
+    checkpoint();
+    if (k === 'toCeil') { bx.toCeil = e.target.checked; if (!bx.toCeil && !bx.h) bx.h = Math.max(100, p.room.height - bx.bottom); }
+    else { const v = toMM(e.target.value); if (v >= 0) bx[k] = v; }
+    changed();
+  };
+  box.onclick = e => {
+    const a = e.target.closest('button')?.dataset.a;
+    if (a === 'close') { S.sel = null; emit('selection'); }
+    if (a === 'addwin') {
+      checkpoint();
+      const top = bx.toCeil ? p.room.height : bx.bottom + bx.h;
+      const w = Math.min(600, bx.w - 100), h = Math.min(500, top - bx.bottom - 100);
+      const win = { id: uid(), wall: bx.wall, host: bx.id, glass: 'clear', off: bx.off + (bx.w - w) / 2, w, h, sill: bx.bottom + 50 };
+      p.room.windows.push(win); S.sel = win.id; changed(); emit('selection');
+    }
+    if (a === 'delbox') {
+      checkpoint();
+      p.room.boxes = p.room.boxes.filter(b => b.id !== bx.id);
+      p.room.windows.forEach(w => { if (w.host === bx.id) w.host = null; });
+      S.sel = null; changed(); emit('selection');
+    }
   };
 }
 
@@ -136,6 +195,8 @@ function renderInspector() {
   if (view !== '2d') { box.hidden = true; return; }
   const win = selWindow();
   if (win) return renderWinInspector(box, win);
+  const bx = selBox();
+  if (bx) return renderBoxInspector(box, bx);
   const it = selItem();
   if (!it) { box.hidden = true; return; }
   const li = lib(it.libId);
@@ -466,10 +527,34 @@ function renderRoom() {
               <label>窗寬（cm）<input data-k="wd${w.id}" data-wk="w" type="number" inputmode="decimal" step="0.1" value="${cm(w.w)}"></label>
               <label>窗高（cm）<input data-k="wh${w.id}" data-wk="h" type="number" inputmode="decimal" step="0.1" value="${cm(w.h)}"></label>
               <label>窗台離地（cm）<input data-k="ws${w.id}" data-wk="sill" type="number" inputmode="decimal" step="0.1" value="${cm(w.sill)}"></label>
+              <label>開在<select data-k="wt${w.id}" data-wk="host">${hostOpts(r, w)}</select></label>
+              <label>玻璃<select data-k="wg${w.id}" data-wk="glass">${glassOpts(w)}</select></label>
             </div>
           </div>`).join('')}
         <button data-addwin>＋ 新增窗戶</button>
         <p class="mute small">也可以在平面圖點一面牆，進入牆面視圖直接拖曳窗戶、用邊設定距離。</p>
+
+        <div class="lbl">牆面量體</div>
+        <p class="mute small">貼著牆凸出的箱體，例如舊冷氣窗台、樑、管道間。窗戶可以開在它的正面。</p>
+        ${(r.boxes || []).map((b, j) => `
+          <div class="door" data-box="${b.id}">
+            <div class="dhead"><b>量體 ${j + 1}</b><button class="ghost x danger" data-delbox="${b.id}">刪除</button></div>
+            <div class="grid2">
+              <label>在哪面牆<select data-k="bw${b.id}" data-bk="wall">${walls.map((x, i) => `<option value="${i}" ${b.wall === i ? 'selected' : ''}>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）</option>`).join('')}</select></label>
+              <label>距角 ${cornerName(b.wall)}（cm）<input data-k="bo${b.id}" data-bk="off" type="number" inputmode="decimal" step="0.1" value="${cm(b.off)}"></label>
+              <label>寬（cm）<input data-k="bd${b.id}" data-bk="w" type="number" inputmode="decimal" step="0.1" value="${cm(b.w)}"></label>
+              <label>凸出深度（cm）<input data-k="bp${b.id}" data-bk="depth" type="number" inputmode="decimal" step="0.1" value="${cm(b.depth)}"></label>
+              <label>底部離地（cm）<input data-k="bb${b.id}" data-bk="bottom" type="number" inputmode="decimal" step="0.1" value="${cm(b.bottom)}"></label>
+              ${b.toCeil ? '' : `<label>高（cm）<input data-k="bh${b.id}" data-bk="h" type="number" inputmode="decimal" step="0.1" value="${cm(b.h)}"></label>`}
+            </div>
+            <label class="chk"><input type="checkbox" data-k="bc${b.id}" data-bk="toCeil" ${b.toCeil ? 'checked' : ''}> 頂到天花板</label>
+          </div>`).join('')}
+        <button data-addbox>＋ 新增量體</button>
+
+        <div class="lbl">牆外是什麼（日照用）</div>
+        <p class="mute small">只有外牆上的門窗會有陽光照進來。外面是走道、樓梯間或其他房間的牆，請設成「室內」。</p>
+        <div class="extlist">${walls.map((x, i) => `<div class="extrow"><span>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）</span>
+          <div class="seg small"><button data-ext="${i}" data-v="out" class="${isInterior(r, i) ? '' : 'on'}">室外</button><button data-ext="${i}" data-v="in" class="${isInterior(r, i) ? 'on' : ''}">室內</button></div></div>`).join('')}</div>
 
         <div class="lbl">外觀</div>
         <div class="grid2">
@@ -526,8 +611,20 @@ $('#tab-room').addEventListener('change', async e => {
     const id = t.closest('[data-win]').dataset.win;
     roomChange(r => {
       const w = r.windows.find(x => x.id === id);
-      if (wk === 'wall') w.wall = +t.value;
+      if (wk === 'host' || wk === 'glass') setWinOpt(r, w, wk, t.value);
+      else if (wk === 'wall') { w.wall = +t.value; w.host = null; }
       else { const v = toMM(t.value); if (v >= 0) w[wk] = v; }
+    }, false);
+    return;
+  }
+  const bk = t.dataset.bk;
+  if (bk) {
+    const id = t.closest('[data-box]').dataset.box;
+    roomChange(r => {
+      const b = r.boxes.find(x => x.id === id);
+      if (bk === 'wall') { b.wall = +t.value; r.windows.forEach(w => { if (w.host === b.id) w.wall = b.wall; }); }
+      else if (bk === 'toCeil') { b.toCeil = t.checked; if (!b.toCeil && !b.h) b.h = Math.max(100, r.height - b.bottom); }
+      else { const v = toMM(t.value); if (v >= 0) b[bk] = v; }
     }, false);
     return;
   }
@@ -556,6 +653,8 @@ $('#tab-room').addEventListener('click', async e => {
         r.w = r.walls[0].len; r.d = r.walls[1].len;
         r.doors.forEach(d => { d.wall = Math.min(d.wall, 3); });
         r.windows.forEach(w => { w.wall = Math.min(w.wall, 3); });
+        r.boxes.forEach(b => { b.wall = Math.min(b.wall, 3); });
+        r.interior = r.interior.filter(i => i < 4);
         p.layouts.forEach(l => l.items.forEach(it => { if (it.wall != null) it.wall = Math.min(it.wall, 3); }));
       }
       r.mode = b.dataset.mode;
@@ -570,6 +669,10 @@ $('#tab-room').addEventListener('click', async e => {
       r.walls.splice(i, 1);
       r.doors = r.doors.filter(d => d.wall !== i).map(d => ({ ...d, wall: d.wall > i ? d.wall - 1 : d.wall }));
       r.windows = r.windows.filter(w => w.wall !== i).map(w => ({ ...w, wall: w.wall > i ? w.wall - 1 : w.wall }));
+      const gone = new Set(r.boxes.filter(b => b.wall === i).map(b => b.id));
+      r.boxes = r.boxes.filter(b => b.wall !== i).map(b => ({ ...b, wall: b.wall > i ? b.wall - 1 : b.wall }));
+      r.windows.forEach(w => { if (gone.has(w.host)) w.host = null; });
+      r.interior = r.interior.filter(x => x !== i).map(x => (x > i ? x - 1 : x));
       // 掛在被刪掉那面牆上的畫一併移除，其他的牆號往前補
       for (const l of p.layouts) {
         l.items = l.items.filter(it => it.wall !== i);
@@ -585,6 +688,19 @@ $('#tab-room').addEventListener('click', async e => {
   }
   if (b.hasAttribute('data-addwin')) {
     roomChange(r => { r.windows.push({ id: uid(), wall: 0, off: 600, w: 1200, h: 1200, sill: 900 }); }, false);
+    return;
+  }
+  if (b.hasAttribute('data-addbox')) {
+    roomChange(r => { r.boxes.push({ id: uid(), wall: 0, off: 0, w: 1000, depth: 500, bottom: 1900, h: 700, toCeil: true }); }, false);
+    return;
+  }
+  if (b.dataset.delbox) {
+    roomChange(r => { r.boxes = r.boxes.filter(x => x.id !== b.dataset.delbox); r.windows.forEach(w => { if (w.host === b.dataset.delbox) w.host = null; }); }, false);
+    return;
+  }
+  if (b.dataset.ext != null) {
+    const i = +b.dataset.ext;
+    roomChange(r => { r.interior = r.interior.filter(x => x !== i); if (b.dataset.v === 'in') r.interior.push(i); }, false);
     return;
   }
   if (b.dataset.delwin) { roomChange(r => { r.windows = r.windows.filter(w => w.id !== b.dataset.delwin); }, false); return; }
@@ -795,13 +911,14 @@ function openMenu() {
       <li><b>精確距離</b>：選取物件 → 點它的一條邊 → 點另一條邊（牆、門框、其他物件）→ 輸入距離。不平行的話會自動轉正。</li>
       <li><b>鎖定</b>：鎖住的物件不會被拖動，但可以當距離基準。</li>
       <li><b>牆面（掛畫、窗戶）</b>：在平面圖點一面牆（或牆名標籤），切到牆面視圖。可以拖曳畫和窗戶，也能用「點邊 → 點基準邊」對齊天花板、門框、傢俱頂面或其他畫。</li>
+      <li><b>牆面量體與外牆</b>：在「房間」可以新增貼牆凸出的量體（例如冷氣窗台），窗戶可以開在它的正面，玻璃可選透明或霧面。也可以標記哪些牆是室內牆：室內牆上的門窗不會有陽光照進來。</li>
       <li><b>指北針</b>：點左下角的指北針可切換「房間擺正」和「正北朝上」，像 Google 地圖一樣。</li>
       <li><b>日照</b>：先在「房間」分頁設定座標和北方，再按「☀️ 日照」。拖日期和時間（或按 ▶ 播放一天），2D 會畫出陽光落在地板上的範圍（虛線＝被傢俱擋住的部分），3D 會模擬陽光從窗戶照進來。目前還沒計入周邊建物遮擋。</li>
       <li><b>量測線</b>：切到「量測線」模式，點兩條平行的邊，就會一直顯示它們之間的距離。</li>
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.3.1・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.4・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);

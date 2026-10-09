@@ -126,6 +126,8 @@ p { margin: 0; }
 .wname small { color: var(--mute); font-weight: 400; }
 .closure { font-size: 13px; background: var(--accent-soft); border-radius: 10px; padding: 7px 10px; }
 .closure.bad { background: #fbe9e1; color: var(--warn); }
+.extlist { display: flex; flex-direction: column; gap: 6px; }
+.extrow { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 .door { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #fffaf3; }
 .dhead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 

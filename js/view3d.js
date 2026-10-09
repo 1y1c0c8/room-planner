@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js';
-import { buildRoom, wallEdges } from './geom.js';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth } from './geom.js';
 import { V, pointInPoly, segDist, clamp } from './util.js';
 
 const M = 0.001; // mm → m
@@ -189,7 +189,9 @@ export class View3D {
     const frameMat = new THREE.MeshStandardMaterial({ color: '#8b7b6b', roughness: 0.7 });
     const winMat = new THREE.MeshStandardMaterial({ color: '#f3f1ec', roughness: 0.6 });
     const glassMat = new THREE.MeshStandardMaterial({ color: '#cfe3ec', transparent: true, opacity: 0.22, roughness: 0.1, side: THREE.DoubleSide, depthWrite: false });
-    this.disposables.push(wallMat, capMat, frameMat, winMat, glassMat);
+    const frostMat = new THREE.MeshStandardMaterial({ color: '#f2f4f2', transparent: true, opacity: 0.82, roughness: 0.9, side: THREE.DoubleSide });
+    const backMat = new THREE.MeshStandardMaterial({ color: '#7f776d', roughness: 1 });
+    this.disposables.push(wallMat, capMat, frameMat, winMat, glassMat, frostMat, backMat);
     walls.forEach((w, i) => {
       const doors = (room.doors || []).filter(d => d.wall === i).sort((a, c) => a.off - c.off);
       const c = [[0, 0]];
@@ -203,7 +205,7 @@ export class View3D {
       const wins = (room.windows || []).filter(x => x.wall === i).map(x => {
         const u0 = clamp(x.off, 5, w.len - 5), u1 = clamp(x.off + x.w, 5, w.len - 5);
         const v0 = clamp(x.sill, 5, H - 5), v1 = clamp(x.sill + x.h, 5, H - 5);
-        return { u0, u1, v0, v1 };
+        return { u0, u1, v0, v1, dp: winDepth(room, x), frosted: x.glass === 'frosted' };
       }).filter(x => x.u1 - x.u0 > 10 && x.v1 - x.v0 > 10);
       const holes = wins.map(x => [[x.u0, x.v0], [x.u1, x.v0], [x.u1, x.v1], [x.u0, x.v1]]);
       const mesh = new THREE.Mesh(planar(dedupe(c), map, new THREE.Vector3(w.n.x, 0, w.n.y), [M, M], holes), wallMat);
@@ -220,7 +222,7 @@ export class View3D {
       for (const x of wins) {
         const add = (u, len, hgt, v) => {
           const fr = new THREE.Mesh(new THREE.BoxGeometry(len * M, hgt * M, 0.12), winMat);
-          const pt = V.add(V.add(w.a, V.scale(w.u, u)), V.scale(w.n, -40));
+          const pt = V.add(V.add(w.a, V.scale(w.u, u)), V.scale(w.n, x.dp - 40)); // 開在量體上時，窗框在量體正面
           fr.position.set(pt.x * M, v * M, pt.y * M);
           fr.rotation.y = -Math.atan2(w.u.y, w.u.x);
           this.group.add(fr);
@@ -231,11 +233,24 @@ export class View3D {
         add((x.u0 + x.u1) / 2, ww, 30, x.v1 + 15);
         add((x.u0 + x.u1) / 2, ww + 80, 40, x.v0 - 20);
         add((x.u0 + x.u1) / 2, 30, hh, (x.v0 + x.v1) / 2); // 中間窗框
-        const glass = new THREE.Mesh(new THREE.PlaneGeometry(ww * M, hh * M), glassMat);
-        const gp = V.add(V.add(w.a, V.scale(w.u, (x.u0 + x.u1) / 2)), V.scale(w.n, -40));
+        const glass = new THREE.Mesh(new THREE.PlaneGeometry(ww * M, hh * M), x.frosted ? frostMat : glassMat);
+        if (x.frosted) this.casters.push(glass); // 霧面玻璃：擋掉直射光（光會擴散，不會有清楚光斑）
+        const gp = V.add(V.add(w.a, V.scale(w.u, (x.u0 + x.u1) / 2)), V.scale(w.n, x.dp - 40));
         glass.position.set(gp.x * M, ((x.v0 + x.v1) / 2) * M, gp.y * M);
         glass.rotation.y = -Math.atan2(w.u.y, w.u.x);
         this.group.add(glass);
+      }
+      // 內牆：開口後面是走道或其他房間，放一面暗牆（看起來像走道，日照時也擋光）
+      if (isInterior(room, i)) {
+        const ops = [...doors.map(d => ({ u0: d.off, u1: d.off + d.w, v0: 0, v1: Math.min(d.h, H) })), ...wins];
+        for (const o of ops) {
+          const back = new THREE.Mesh(new THREE.PlaneGeometry((o.u1 - o.u0 + 800) * M, (o.v1 - o.v0 + 400) * M), backMat);
+          const pt = V.add(V.add(w.a, V.scale(w.u, (o.u0 + o.u1) / 2)), V.scale(w.n, -900));
+          back.position.set(pt.x * M, ((o.v0 + o.v1) / 2) * M, pt.y * M);
+          back.rotation.y = Math.atan2(w.n.x, w.n.y); // 正面朝向房內：從外面環繞時看不到它，但仍會擋光
+          this.group.add(back);
+          this.casters.push(back);
+        }
       }
       // 門框
       for (const d of doors) {
@@ -251,6 +266,30 @@ export class View3D {
         add(d.off + d.w + 15, 30, dh, dh / 2);
         add(d.off + d.w / 2, d.w + 60, 30, dh + 15);
       }
+    });
+
+    // 牆面量體（例如舊冷氣窗台）
+    (room.boxes || []).forEach(bx => {
+      const g = boxGeom(bx, walls, H);
+      if (!g || g.z1 - g.z0 < 5 || bx.w < 5 || bx.depth < 5) return;
+      const { W, t0, t1, z0, z1, depth } = g;
+      const P3 = (t, d, z) => { const q = V.add(V.add(W.a, V.scale(W.u, t)), V.scale(W.n, d)); return [q.x * M, z * M, q.y * M]; };
+      const face = (contour, map, normal, holes = []) => {
+        const m = new THREE.Mesh(planar(contour, map, normal, [M, M], holes), wallMat);
+        m.receiveShadow = true;
+        this.group.add(m);
+        this.casters.push(m);
+      };
+      const nIn = new THREE.Vector3(W.n.x, 0, W.n.y), uV = new THREE.Vector3(W.u.x, 0, W.u.y);
+      const hosted = (room.windows || []).filter(x => x.host === bx.id).map(x => {
+        const u0 = clamp(x.off, t0 + 5, t1 - 5), u1 = clamp(x.off + x.w, t0 + 5, t1 - 5), v0 = clamp(x.sill, z0 + 5, z1 - 5), v1 = clamp(x.sill + x.h, z0 + 5, z1 - 5);
+        return [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+      }).filter(h => h[1][0] - h[0][0] > 10 && h[2][1] - h[1][1] > 10);
+      face([[t0, z0], [t1, z0], [t1, z1], [t0, z1]], (u, v) => P3(u, depth, v), nIn, hosted); // 正面
+      face([[t0, 0], [t1, 0], [t1, depth], [t0, depth]], (u, v) => P3(u, v, z0), new THREE.Vector3(0, -1, 0)); // 底面
+      if (z1 < H - 1) face([[t0, 0], [t1, 0], [t1, depth], [t0, depth]], (u, v) => P3(u, v, z1), new THREE.Vector3(0, 1, 0)); // 頂面
+      face([[0, z0], [depth, z0], [depth, z1], [0, z1]], (u, v) => P3(t0, u, v), uV.clone().negate()); // 左右側面
+      face([[0, z0], [depth, z0], [depth, z1], [0, z1]], (u, v) => P3(t1, u, v), uV);
     });
 
     // 物件

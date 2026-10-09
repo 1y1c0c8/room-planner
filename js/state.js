@@ -26,7 +26,7 @@ export function defaultRoom() {
   return {
     mode: 'rect', w: 3000, d: 3000,
     walls: [{ len: 3000, turn: 90 }, { len: 3000, turn: 90 }, { len: 3000, turn: 90 }, { len: 3000, turn: 90 }],
-    closure: 'distribute', height: 2600, doors: [], windows: [],
+    closure: 'distribute', height: 2600, doors: [], windows: [], boxes: [], interior: [],
     wallColor: '#eeeae3', floorColor: '#c9a985', floorTex: null, floorTile: 300,
     north: 0, lat: null, lng: null, // 日光模式預留
   };
@@ -191,7 +191,7 @@ export async function loadAll() {
     S.projects.push(p);
     await db.put('projects', p);
   }
-  for (const p of S.projects) p.room.windows ||= []; // v0.1 的資料沒有窗戶欄位
+  for (const p of S.projects) { p.room.windows ||= []; p.room.boxes ||= []; p.room.interior ||= []; } // 舊版資料補欄位
   S.projectId = last && S.projects.some(p => p.id === last.value) ? last.value : S.projects[0].id;
   try { await navigator.storage?.persist?.(); } catch { /* 不支援就算了 */ }
 }
@@ -226,7 +226,7 @@ export async function importData(data) {
   }
   S.library = await db.all('library');
   S.projects = await db.all('projects');
-  for (const p of S.projects) p.room.windows ||= [];
+  for (const p of S.projects) { p.room.windows ||= []; p.room.boxes ||= []; p.room.interior ||= []; }
   if (!S.projects.some(p => p.id === S.projectId)) S.projectId = S.projects[0]?.id;
   S.sel = null;
   clearHistory();

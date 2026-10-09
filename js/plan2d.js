@@ -2,7 +2,7 @@
 import { S, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, emit, getImg } from './state.js';
 import { Elev } from './elev.js';
 import { V, segDist, cm, uid, clamp, normDeg } from './util.js';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, isParallel, measureGeom, cornerName, WALL_T } from './geom.js';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth } from './geom.js';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -168,6 +168,11 @@ export class Plan2D {
     this.polyPath(ctx, poly);
     ctx.lineJoin = 'miter'; ctx.miterLimit = 10;
     ctx.lineWidth = WALL_T * 2; ctx.strokeStyle = C.wall; ctx.stroke();
+    // 內牆（外面是走道或其他房間）用淺色，和外牆區分
+    for (const W of walls) if (isInterior(p.room, W.i)) {
+      ctx.beginPath(); ctx.moveTo(W.a.x, W.a.y); ctx.lineTo(W.b.x, W.b.y);
+      ctx.lineWidth = WALL_T * 2 - 2 / s; ctx.lineCap = 'butt'; ctx.strokeStyle = '#a69c90'; ctx.stroke();
+    }
     const floor = this.floorStyle(ctx, p.room);
     this.polyPath(ctx, poly);
     ctx.fillStyle = floor; ctx.fill();
@@ -230,12 +235,22 @@ export class Plan2D {
     ctx.lineWidth = 1.2 / this.scale;
     for (const w of D.p.room.windows || []) {
       const W = D.walls[w.wall];
-      if (!W || V.dot(d, W.n) >= 0) continue; // 太陽在牆的室內側＝照不進這扇窗
+      if (!W || isInterior(D.p.room, w.wall) || V.dot(d, W.n) >= 0) continue; // 內牆、或太陽在室內側＝照不進來
       const lo = Math.max(0, w.sill), hi = Math.min(H, w.sill + w.h);
       if (hi <= lo) continue;
-      const P = (t, z) => V.sub(V.add(W.a, V.scale(W.u, t)), V.scale(d, z * cot));
+      const base = V.scale(W.n, winDepth(D.p.room, w));
+      const P = (t, z) => V.sub(V.add(V.add(W.a, V.scale(W.u, t)), base), V.scale(d, z * cot));
       const q = [P(w.off, lo), P(w.off + w.w, lo), P(w.off + w.w, hi), P(w.off, hi)];
       ctx.beginPath(); q.forEach((pt, i) => (i ? ctx.lineTo(pt.x, pt.y) : ctx.moveTo(pt.x, pt.y))); ctx.closePath();
+      if (w.glass === 'frosted') {
+        // 霧面玻璃：光會擴散，沒有清楚的光斑，只畫一圈淡淡的亮區
+        if (outline) continue;
+        ctx.save();
+        if ('filter' in ctx) ctx.filter = `blur(${Math.max(4, 160 * this.scale)}px)`;
+        ctx.fillStyle = 'rgba(255, 215, 110, .28)'; ctx.fill();
+        ctx.restore();
+        continue;
+      }
       if (outline) { ctx.setLineDash([6 / this.scale, 4 / this.scale]); ctx.stroke(); ctx.setLineDash([]); }
       else { ctx.fill(); ctx.stroke(); }
     }
@@ -273,11 +288,18 @@ export class Plan2D {
   wallThings(D) {
     const out = [];
     const T = WALL_T, s = this.scale;
+    (D.p.room.boxes || []).forEach((bx, j) => {
+      const W = D.walls[bx.wall];
+      if (!W) return;
+      const a = V.add(W.a, V.scale(W.u, bx.off)), b = V.add(W.a, V.scale(W.u, bx.off + bx.w));
+      out.push({ kind: 'box', id: bx.id, wall: bx.wall, label: `量體 ${j + 1}`, quad: [a, b, V.add(b, V.scale(W.n, bx.depth)), V.add(a, V.scale(W.n, bx.depth))], a, b, W });
+    });
     (D.p.room.windows || []).forEach((w, j) => {
       const W = D.walls[w.wall];
       if (!W) return;
-      const a = V.add(W.a, V.scale(W.u, w.off)), b = V.add(W.a, V.scale(W.u, w.off + w.w));
-      out.push({ kind: 'win', id: w.id, wall: w.wall, label: `窗 ${j + 1}`, quad: [a, b, V.add(b, V.scale(W.n, -T)), V.add(a, V.scale(W.n, -T))], a, b, W });
+      const dp = winDepth(D.p.room, w), o = V.scale(W.n, dp);
+      const a = V.add(V.add(W.a, V.scale(W.u, w.off)), o), b = V.add(V.add(W.a, V.scale(W.u, w.off + w.w)), o);
+      out.push({ kind: 'win', id: w.id, wall: w.wall, label: `窗 ${j + 1}`, frosted: w.glass === 'frosted', quad: [a, b, V.add(b, V.scale(W.n, -T)), V.add(a, V.scale(W.n, -T))], a, b, W });
     });
     for (const it of D.lay.items) {
       const li = lib(it.libId);
@@ -294,8 +316,11 @@ export class Plan2D {
     const s = this.scale;
     for (const t of this.wallThings(D)) {
       ctx.beginPath(); t.quad.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath();
-      if (t.kind === 'win') {
-        ctx.fillStyle = '#e3eef2'; ctx.fill();
+      if (t.kind === 'box') {
+        ctx.fillStyle = 'rgba(120,110,100,.12)'; ctx.fill();
+        ctx.setLineDash([6 / s, 4 / s]); ctx.strokeStyle = '#6b5f52'; ctx.lineWidth = 1.3 / s; ctx.stroke(); ctx.setLineDash([]);
+      } else if (t.kind === 'win') {
+        ctx.fillStyle = t.frosted ? '#eef0ee' : '#e3eef2'; ctx.fill();
         ctx.strokeStyle = '#6f858f'; ctx.lineWidth = 1.2 / s; ctx.stroke();
         for (const f of [0.35, 0.65]) {
           const p1 = V.add(t.a, V.scale(t.W.n, -WALL_T * f)), p2 = V.add(t.b, V.scale(t.W.n, -WALL_T * f));
@@ -467,7 +492,7 @@ export class Plan2D {
   drawMeasures(ctx, D) {
     this.measureHits = [];
     const map = new Map(D.refs.map(r => [r.key, r]));
-    const key = r => (r.k === 'wall' ? `wall:${r.i}` : r.k === 'door' ? `door:${r.id}:${r.s}` : `item:${r.id}:${r.e}`);
+    const key = refKey;
     for (const m of D.lay.measures) {
       const e1 = map.get(key(m.a)), e2 = map.get(key(m.b));
       if (!e1 || !e2) continue;
