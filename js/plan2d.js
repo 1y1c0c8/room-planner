@@ -24,6 +24,8 @@ export class Plan2D {
     this.hover = null; this.snapHits = []; this.measureHits = [];
     this.active = true; this.needFit = true;
     this.ev = null;        // 牆面立面圖（開啟時取代平面圖）
+    this.viewRot = 0;      // 平面圖旋轉（弧度）；正北朝上時＝ -north
+    this.northUp = false;
     this.wallHits = [];    // 牆名標籤的點擊範圍
     canvas.addEventListener('pointerdown', e => this.down(e));
     canvas.addEventListener('pointermove', e => this.move(e));
@@ -51,7 +53,7 @@ export class Plan2D {
     if (this.ev) { this.ev.fit(); this.draw(); return; }
     const p = P();
     if (!p || !this.w) return;
-    const poly = buildRoom(p.room).poly;
+    const poly = buildRoom(p.room).poly.map(q => V.rot(q, this.viewRot));
     const xs = poly.map(q => q.x), ys = poly.map(q => q.y);
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
     const m = this.w < 600 ? 70 : 96;
@@ -71,8 +73,38 @@ export class Plan2D {
     this.scale = ns; this.ox = px - wx * ns; this.oy = py - wy * ns;
     this.draw();
   }
-  toS(p) { return { x: p.x * this.scale + this.ox, y: p.y * this.scale + this.oy }; }
-  toW(x, y) { return { x: (x - this.ox) / this.scale, y: (y - this.oy) / this.scale }; }
+  toS(p) { const q = V.rot(p, this.viewRot); return { x: q.x * this.scale + this.ox, y: q.y * this.scale + this.oy }; }
+  toW(x, y) { return V.rot({ x: (x - this.ox) / this.scale, y: (y - this.oy) / this.scale }, -this.viewRot); }
+  // 螢幕上的位移 → 平面圖座標的位移
+  toWDelta(dx, dy) { return V.rot({ x: dx / this.scale, y: dy / this.scale }, -this.viewRot); }
+
+  // 指北針：房間擺正 ⇄ 正北朝上（像 Google 地圖）
+  toggleNorthUp() {
+    const north = ((P()?.room.north || 0) * Math.PI) / 180;
+    this.northUp = !this.northUp;
+    const from = this.viewRot, to = this.northUp ? -north : 0;
+    let diff = to - from;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    const t0 = performance.now(), dur = 350;
+    const step = now => {
+      const k = Math.min(1, (now - t0) / dur), e = 1 - (1 - k) ** 3;
+      this.viewRot = from + diff * e;
+      this.fit();
+      if (k < 1) requestAnimationFrame(step);
+      else this.ui.toast(this.northUp ? '正北朝上（再點指北針回到房間擺正）' : '房間擺正');
+    };
+    requestAnimationFrame(step);
+  }
+  // 北方角度改了之後，正北朝上模式要跟著轉
+  syncNorth() {
+    if (!this.northUp) return;
+    const r = -((P()?.room.north || 0) * Math.PI) / 180;
+    if (Math.abs(r - this.viewRot) < 1e-6) return;
+    this.viewRot = r;
+    this.fit();
+  }
+  hitCompass(pos) { return Math.hypot(pos.x - 44, pos.y - (this.h - 44)) < 30; }
   evPos(e) { const r = this.c.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
 
   openWall(i, selId = null) {
@@ -130,6 +162,7 @@ export class Plan2D {
 
     ctx.save();
     ctx.translate(this.ox, this.oy);
+    ctx.rotate(this.viewRot);
     ctx.scale(s, s);
     // 牆（畫粗線，內側一半被地板蓋掉 → 露出外側牆厚）
     this.polyPath(ctx, poly);
@@ -212,11 +245,11 @@ export class Plan2D {
   // 指北針（日照模式時加上太陽方向）
   drawCompass(ctx, room) {
     const cx = 44, cy = this.h - 44, r = 24;
-    const t = ((room.north || 0) * Math.PI) / 180;
+    const t = ((room.north || 0) * Math.PI) / 180 + this.viewRot;
     ctx.save();
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,253,249,.92)'; ctx.fill();
-    ctx.strokeStyle = '#d6cfc4'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = this.northUp ? '#c4572a' : '#d6cfc4'; ctx.lineWidth = this.northUp ? 2 : 1; ctx.stroke();
     const dir = (ang, len) => ({ x: cx + Math.sin(ang) * len, y: cy - Math.cos(ang) * len });
     const tip = dir(t, r - 5), tail = dir(t + Math.PI, r - 9), l = dir(t - Math.PI / 2, 5), rr = dir(t + Math.PI / 2, 5);
     ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(l.x, l.y); ctx.lineTo(rr.x, rr.y); ctx.closePath();
@@ -227,7 +260,8 @@ export class Plan2D {
     ctx.font = '700 11px -apple-system, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = '#c4572a'; ctx.fillText('N', n.x, n.y);
     if (this.sun) {
-      const sp = { x: cx + this.sun.d.x * (r + 10), y: cy + this.sun.d.y * (r + 10) };
+      const sd = V.rot(this.sun.d, this.viewRot);
+      const sp = { x: cx + sd.x * (r + 10), y: cy + sd.y * (r + 10) };
       ctx.font = '14px sans-serif';
       ctx.globalAlpha = this.sun.alt > 0 ? 1 : 0.35;
       ctx.fillText('☀️', sp.x, sp.y);
@@ -311,16 +345,22 @@ export class Plan2D {
   }
 
   drawGrid(ctx) {
-    const s = this.scale, w0 = this.toW(0, 0), w1 = this.toW(this.w, this.h);
+    const s = this.scale;
+    const cs = [this.toW(0, 0), this.toW(this.w, 0), this.toW(0, this.h), this.toW(this.w, this.h)];
+    const x0 = Math.min(...cs.map(c => c.x)), x1 = Math.max(...cs.map(c => c.x));
+    const y0 = Math.min(...cs.map(c => c.y)), y1 = Math.max(...cs.map(c => c.y));
     const minor = s * 100 >= 9 ? 100 : s * 500 >= 9 ? 500 : 0;
-    ctx.lineWidth = 1;
+    ctx.save();
+    ctx.translate(this.ox, this.oy); ctx.rotate(this.viewRot); ctx.scale(s, s);
+    ctx.lineWidth = 1 / s;
     for (const [st, col] of [[minor, C.grid], [1000, C.gridMaj]]) {
       if (!st) continue;
       ctx.beginPath();
-      for (let x = Math.floor(w0.x / st) * st; x <= w1.x; x += st) { const sx = Math.round(x * s + this.ox) + 0.5; ctx.moveTo(sx, 0); ctx.lineTo(sx, this.h); }
-      for (let y = Math.floor(w0.y / st) * st; y <= w1.y; y += st) { const sy = Math.round(y * s + this.oy) + 0.5; ctx.moveTo(0, sy); ctx.lineTo(this.w, sy); }
+      for (let x = Math.floor(x0 / st) * st; x <= x1; x += st) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+      for (let y = Math.floor(y0 / st) * st; y <= y1; y += st) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
       ctx.strokeStyle = col; ctx.stroke();
     }
+    ctx.restore();
   }
 
   drawItem(ctx, it, alpha) {
@@ -571,6 +611,7 @@ export class Plan2D {
       return;
     }
     if (this.pointers.size > 2 || !this.D) return;
+    if (this.hitCompass(pos)) { this.drag = null; this.toggleNorthUp(); return; }
     const touch = e.pointerType === 'touch';
     const w = this.toW(pos.x, pos.y);
     const tol = (touch ? 22 : 10) / this.scale;
@@ -633,8 +674,9 @@ export class Plan2D {
       const it = dr.item;
       const fine = e.shiftKey;
       const step = fine ? 1 : 10; // 預設 1 cm，按住 Shift 0.1 cm
-      it.x = dr.orig.x + Math.round(dx / this.scale / step) * step;
-      it.y = dr.orig.y + Math.round(dy / this.scale / step) * step;
+      const wd = this.toWDelta(dx, dy);
+      it.x = dr.orig.x + Math.round(wd.x / step) * step;
+      it.y = dr.orig.y + Math.round(wd.y / step) * step;
       this.snapHits = [];
       if (!fine) this.edgeSnap(it, (e.pointerType === 'touch' ? 14 : 8) / this.scale);
       this.draw();
@@ -643,7 +685,7 @@ export class Plan2D {
     if (dr.type === 'rot') {
       if (first) checkpoint();
       const it = dr.item, c = this.toS(it);
-      let ang = (Math.atan2(pos.y - c.y, pos.x - c.x) * 180) / Math.PI + 90;
+      let ang = ((Math.atan2(pos.y - c.y, pos.x - c.x) - this.viewRot) * 180) / Math.PI + 90;
       ang = e.shiftKey ? Math.round(ang) : Math.round(ang / 15) * 15;
       it.rot = normDeg(ang);
       this.draw();
@@ -704,7 +746,8 @@ export class Plan2D {
       if (r) { h = { type: 'ref', key: r.key }; cursor = 'pointer'; }
     } else {
       const sel = selItem();
-      if (sel && !sel.locked && this.hitRot(sel, pos, false)) { h = { type: 'rot' }; cursor = 'grab'; }
+      if (this.hitCompass(pos)) cursor = 'pointer';
+      else if (sel && !sel.locked && this.hitRot(sel, pos, false)) { h = { type: 'rot' }; cursor = 'grab'; }
       else if (sel && this.hitOwnEdge(sel, w, tol) >= 0) { h = { type: 'edge', i: this.hitOwnEdge(sel, w, tol) }; cursor = 'pointer'; }
       else if (this.hitItem(w, 0)) cursor = 'move';
       else if (this.wallHits.some(hh => hh && Math.abs(pos.x - hh.x) < hh.w / 2 + 4 && Math.abs(pos.y - hh.y) < hh.h / 2 + 4) || this.hitWallThing(w, 4 / this.scale) || this.hitWallBand(w, 0) >= 0) cursor = 'pointer';

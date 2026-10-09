@@ -795,12 +795,13 @@ function openMenu() {
       <li><b>精確距離</b>：選取物件 → 點它的一條邊 → 點另一條邊（牆、門框、其他物件）→ 輸入距離。不平行的話會自動轉正。</li>
       <li><b>鎖定</b>：鎖住的物件不會被拖動，但可以當距離基準。</li>
       <li><b>牆面（掛畫、窗戶）</b>：在平面圖點一面牆（或牆名標籤），切到牆面視圖。可以拖曳畫和窗戶，也能用「點邊 → 點基準邊」對齊天花板、門框、傢俱頂面或其他畫。</li>
+      <li><b>指北針</b>：點左下角的指北針可切換「房間擺正」和「正北朝上」，像 Google 地圖一樣。</li>
       <li><b>日照</b>：先在「房間」分頁設定座標和北方，再按「☀️ 日照」。拖日期和時間（或按 ▶ 播放一天），2D 會畫出陽光落在地板上的範圍（虛線＝被傢俱擋住的部分），3D 會模擬陽光從窗戶照進來。目前還沒計入周邊建物遮擋。</li>
       <li><b>量測線</b>：切到「量測線」模式，點兩條平行的邊，就會一直顯示它們之間的距離。</li>
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.3・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.3.1・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -966,7 +967,8 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     if (it.locked) { toast('已鎖定'); return; }
     const st = e.shiftKey ? 1 : 10;
-    checkpoint(); it.x += arrows[e.key][0] * st; it.y += arrows[e.key][1] * st; changed();
+    const wd = plan.toWDelta(arrows[e.key][0] * st * plan.scale, arrows[e.key][1] * st * plan.scale); // 方向鍵跟著畫面方向
+    checkpoint(); it.x += wd.x; it.y += wd.y; changed();
     return;
   }
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); $('#inspector [data-a="del"]')?.click(); return; }
@@ -995,6 +997,7 @@ on(what => {
   if (what === 'history') { const h = histState(); $('#btnUndo').disabled = !h.u; $('#btnRedo').disabled = !h.r; }
   if (v3d && ['project', 'library', 'images', 'switch', 'settings'].includes(what)) v3d.markDirty();
   if ((what === 'project' || what === 'switch') && sun.on) applySun();
+  if (what === 'project' || what === 'switch') plan.syncNorth();
   updateHint();
 });
 
