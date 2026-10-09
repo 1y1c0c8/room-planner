@@ -5,7 +5,7 @@ import {
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
 } from './state.js';
 import { uid, cm, toMM, esc, normDeg } from './util.js';
-import { buildRoom, wallEdges, cornerName, isInterior } from './geom.js';
+import { buildRoom, wallEdges, cornerName, isInterior, nm } from './geom.js';
 import { Plan2D } from './plan2d.js';
 import { rectify } from './rectify.js';
 import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js';
@@ -14,8 +14,15 @@ const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
 const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）', wall: '牆面物件（畫、海報、鏡子）' };
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
-const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>量體 ${j + 1} 正面（牆 ${b.wall + 1}）</option>`).join('');
+const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => `<option value="clear" ${w.glass !== 'frosted' ? 'selected' : ''}>透明</option><option value="frosted" ${w.glass === 'frosted' ? 'selected' : ''}>霧面（壓花）</option>`;
+const wallOpts = (walls, cur) => walls.map((x, i) => `<option value="${i}" ${cur === i ? 'selected' : ''}>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % walls.length)}）</option>`).join('');
+// 可折疊卡片：展開狀態記在這台裝置
+const openCards = (() => { try { return new Set(JSON.parse(localStorage.getItem('rp-open') || '[]')); } catch { return new Set(); } })();
+const saveOpen = () => { try { localStorage.setItem('rp-open', JSON.stringify([...openCards])); } catch { /* 無痕模式 */ } };
+const card = (kind, id, title, summary, body) => `<details class="door ccard" data-${kind}="${id}" data-card="${id}" ${openCards.has(id) ? 'open' : ''}>
+  <summary><span class="ctitle"><b>${esc(title)}</b><small>${esc(summary)}</small></span><button class="ghost x danger" data-del${kind}="${id}">刪除</button></summary>
+  <div class="grid2 cbody">${body}</div></details>`;
 const selWindow = () => { const p = P(); return p && S.sel ? (p.room.windows || []).find(w => w.id === S.sel) || null : null; };
 const wallsNow = () => wallEdges(buildRoom(P().room).poly);
 const wallName = (i, n) => `牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）`;
@@ -75,7 +82,7 @@ function renderWinInspector(box, win) {
   const p = P(), j = p.room.windows.indexOf(win), walls = wallsNow();
   box.hidden = false;
   box.innerHTML = `
-    <div class="ihead"><div><b>窗 ${j + 1}</b><div class="mute small">${wallName(win.wall, walls.length)}・窗戶屬於房間，所有擺法方案共用</div></div>
+    <div class="ihead"><div><b>${esc(nm(win, `窗 ${j + 1}`))}</b><div class="mute small">${wallName(win.wall, walls.length)}・窗戶屬於房間，所有擺法方案共用</div></div>
       <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
     <div class="grid3 form">
       <label>寬（cm）<input data-wk="w" type="number" inputmode="decimal" step="0.1" value="${cm(win.w)}"></label>
@@ -114,7 +121,7 @@ function renderBoxInspector(box, bx) {
   const p = P(), j = p.room.boxes.indexOf(bx), walls = wallsNow();
   box.hidden = false;
   box.innerHTML = `
-    <div class="ihead"><div><b>量體 ${j + 1}</b><div class="mute small">${wallName(bx.wall, walls.length)}・貼牆凸出的箱體，屬於房間結構</div></div>
+    <div class="ihead"><div><b>${esc(nm(bx, `量體 ${j + 1}`))}</b><div class="mute small">${wallName(bx.wall, walls.length)}・貼牆凸出的箱體，屬於房間結構</div></div>
       <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
     <div class="grid3 form">
       <label>寬（cm）<input data-bk="w" type="number" inputmode="decimal" step="0.1" value="${cm(bx.w)}"></label>
@@ -284,29 +291,41 @@ function thumbHTML(li) {
     : `<div class="thumb ${shape}" style="background:${esc(li.color)}"></div>`;
 }
 
+// 物品庫標籤篩選（選多個＝同時符合），記在這台裝置
+const TAG_PRESETS = ['房東的', '自己的'];
+const libFilter = (() => { try { return new Set(JSON.parse(localStorage.getItem('rp-libfilter') || '[]')); } catch { return new Set(); } })();
+const saveFilter = () => { try { localStorage.setItem('rp-libfilter', JSON.stringify([...libFilter])); } catch { /* 無痕模式 */ } };
+const allTags = () => [...new Set(S.library.flatMap(li => li.tags || []))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+
 function renderLib() {
   const box = $('#tab-lib');
   const lay = L();
-  const items = [...S.library].sort((a, b) => (isRug(b) - isRug(a)) || a.name.localeCompare(b.name, 'zh-Hant'));
+  const tags = allTags();
+  for (const t of [...libFilter]) if (!tags.includes(t)) libFilter.delete(t);
+  const all = [...S.library].sort((a, b) => (isRug(b) - isRug(a)) || a.name.localeCompare(b.name, 'zh-Hant'));
+  const items = all.filter(li => [...libFilter].every(t => (li.tags || []).includes(t)));
   box.innerHTML = `
     <button class="primary block" data-a="new">＋ 新增物品</button>
     <p class="mute small">物品庫在所有空間共用。改了尺寸或外觀，每個空間都會一起更新。</p>
+    ${tags.length ? `<div class="tagbar"><button class="tagf ${libFilter.size ? '' : 'on'}" data-a="tagall">全部 ${all.length}</button>${tags.map(t => `<button class="tagf ${libFilter.has(t) ? 'on' : ''}" data-a="tag" data-tag="${esc(t)}">${esc(t)} ${all.filter(li => (li.tags || []).includes(t)).length}</button>`).join('')}</div>` : ''}
     <div class="libList">${items.map(li => {
       const n = lay ? lay.items.filter(i => i.libId === li.id).length : 0;
       return `<div class="libCard" data-id="${li.id}">
         ${thumbHTML(li)}
         <div class="lc-main"><b>${esc(li.name)}</b>
           <div class="mute small">${isWall(li) ? `${cm(li.w)} × ${cm(li.h)} cm・厚 ${cm(li.d)}` : `${cm(li.w)} × ${cm(li.d)} × ${cm(li.h)} cm`}</div>
-          <div class="tags">${isRug(li) ? '<span class="tag">地毯</span>' : ''}${isWall(li) ? '<span class="tag">牆面</span>' : ''}${(li.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}${n ? `<span class="tag on">此方案 ×${n}</span>` : ''}</div>
+          <div class="tags">${isRug(li) ? '<span class="tag">地毯</span>' : ''}${isWall(li) ? '<span class="tag">牆面</span>' : ''}${(li.tags || []).map(t => `<button class="tag ${libFilter.has(t) ? 'on' : ''}" data-a="tag" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}${n ? `<span class="tag on">此方案 ×${n}</span>` : ''}</div>
         </div>
         <div class="lc-act"><button data-a="place" class="primary">放入</button><button data-a="edit">編輯</button></div>
       </div>`;
-    }).join('') || '<div class="empty">還沒有物品。<br>先新增你的地毯或傢俱吧。</div>'}</div>`;
+    }).join('') || (all.length ? '<div class="empty">沒有同時符合這些標籤的物品。</div>' : '<div class="empty">還沒有物品。<br>先新增你的地毯或傢俱吧。</div>')}</div>`;
 }
 
 $('#tab-lib').addEventListener('click', e => {
-  const a = e.target.closest('button')?.dataset.a;
+  const btn = e.target.closest('button'), a = btn?.dataset.a;
   if (!a) return;
+  if (a === 'tagall') { libFilter.clear(); saveFilter(); renderLib(); return; }
+  if (a === 'tag') { const t = btn.dataset.tag; libFilter.has(t) ? libFilter.delete(t) : libFilter.add(t); saveFilter(); renderLib(); return; }
   if (a === 'new') return openLibForm(null);
   const li = lib(e.target.closest('.libCard')?.dataset.id);
   if (!li) return;
@@ -362,7 +381,8 @@ function openLibForm(src) {
         <button data-t="none">純色</button><button data-t="fit">照片貼頂面</button><button data-t="tile">材質重複鋪貼</button>
       </div>
       <div data-texbox></div>
-      <label>標籤（用逗號分開）<input data-f="tags" value="${esc((f.tags || []).join(', '))}" placeholder="老物件, 收納"></label>
+      <label>標籤（用逗號分開，可以有很多個）<input data-f="tags" value="${esc((f.tags || []).join(', '))}" placeholder="自己的, 老物件, 收納"></label>
+      <div class="tagbar" data-tagsugg></div>
       <label>備註<textarea data-f="notes" rows="3" placeholder="來源、年代、用途，例如：搬家時可裝約 40 本書">${esc(f.notes || '')}</textarea></label>
       ${!isNew ? `<p class="mute small">使用中的空間：${usage(f.id).map(p => esc(p.name)).join('、') || '（無）'}</p>` : ''}
       <div class="btns end">
@@ -456,6 +476,23 @@ function openLibForm(src) {
     m.close();
     if (isNew && confirm(`已建立「${f.name}」。要直接放進目前的空間嗎？`)) placeItem(f);
   };
+  // 標籤建議：點一下加入／移除
+  const tagIn = q('[data-f="tags"]');
+  const curTags = () => tagIn.value.split(/[,，、]/).map(x => x.trim()).filter(Boolean);
+  const renderSugg = () => {
+    const cur = curTags();
+    const sugg = [...new Set([...TAG_PRESETS, ...allTags(), ...cur])];
+    q('[data-tagsugg]').innerHTML = sugg.map(t => `<button type="button" class="tagf ${cur.includes(t) ? 'on' : ''}" data-t2="${esc(t)}">${cur.includes(t) ? '✓ ' : '＋ '}${esc(t)}</button>`).join('');
+  };
+  q('[data-tagsugg]').onclick = e => {
+    const t = e.target.closest('[data-t2]')?.dataset.t2;
+    if (!t) return;
+    const cur = curTags();
+    tagIn.value = (cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]).join(', ');
+    renderSugg();
+  };
+  tagIn.oninput = renderSugg;
+  renderSugg();
   if (isNew) setTimeout(() => q('[data-f="name"]').focus(), 50);
 }
 
@@ -503,53 +540,64 @@ function renderRoom() {
         <label>天花板高度（cm）<input data-k="height" type="number" inputmode="decimal" step="0.1" value="${cm(r.height)}"></label>
 
         <div class="lbl">門</div>
-        ${(r.doors || []).map((d, j) => `
-          <div class="door" data-door="${d.id}">
-            <div class="dhead"><b>門 ${j + 1}</b><button class="ghost x danger" data-deldoor="${d.id}">刪除</button></div>
-            <div class="grid2">
-              <label>在哪面牆<select data-k="dw${d.id}" data-dk="wall">${walls.map((w, i) => `<option value="${i}" ${d.wall === i ? 'selected' : ''}>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）</option>`).join('')}</select></label>
-              <label>距角 ${cornerName(d.wall)}（cm）<input data-k="do${d.id}" data-dk="off" type="number" inputmode="decimal" step="0.1" value="${cm(d.off)}"></label>
-              <label>門寬（cm）<input data-k="dd${d.id}" data-dk="w" type="number" inputmode="decimal" step="0.1" value="${cm(d.w)}"></label>
-              <label>門高（cm）<input data-k="dh${d.id}" data-dk="h" type="number" inputmode="decimal" step="0.1" value="${cm(d.h)}"></label>
-              <label>鉸鏈在<select data-k="dg${d.id}" data-dk="hinge"><option value="start" ${d.hinge !== 'end' ? 'selected' : ''}>靠角 ${cornerName(d.wall)} 那側</option><option value="end" ${d.hinge === 'end' ? 'selected' : ''}>靠角 ${cornerName((d.wall + 1) % n)} 那側</option></select></label>
-              <label>開向<select data-k="ds${d.id}" data-dk="swing"><option value="in" ${d.swing !== 'out' ? 'selected' : ''}>往房內開</option><option value="out" ${d.swing === 'out' ? 'selected' : ''}>往房外開</option></select></label>
-            </div>
-          </div>`).join('')}
+        ${(r.doors || []).map((d, j) => card('door', d.id, nm(d, `門 ${j + 1}`),
+          `牆 ${d.wall + 1}・距角 ${cornerName(d.wall)} ${cm(d.off)}・寬 ${cm(d.w)}・${d.swing === 'out' ? '外開' : '內開'}`, `
+            <label class="span2">名稱<input data-k="dn${d.id}" data-dk="name" value="${esc(d.name || '')}" placeholder="門 ${j + 1}（例如：房門）"></label>
+            <label>在哪面牆<select data-k="dw${d.id}" data-dk="wall">${wallOpts(walls, d.wall)}</select></label>
+            <label>距角 ${cornerName(d.wall)}（cm）<input data-k="do${d.id}" data-dk="off" type="number" inputmode="decimal" step="0.1" value="${cm(d.off)}"></label>
+            <label>門寬（cm）<input data-k="dd${d.id}" data-dk="w" type="number" inputmode="decimal" step="0.1" value="${cm(d.w)}"></label>
+            <label>門高（cm）<input data-k="dh${d.id}" data-dk="h" type="number" inputmode="decimal" step="0.1" value="${cm(d.h)}"></label>
+            <label>鉸鏈在<select data-k="dg${d.id}" data-dk="hinge"><option value="start" ${d.hinge !== 'end' ? 'selected' : ''}>靠角 ${cornerName(d.wall)} 那側</option><option value="end" ${d.hinge === 'end' ? 'selected' : ''}>靠角 ${cornerName((d.wall + 1) % n)} 那側</option></select></label>
+            <label>開向<select data-k="ds${d.id}" data-dk="swing"><option value="in" ${d.swing !== 'out' ? 'selected' : ''}>往房內開</option><option value="out" ${d.swing === 'out' ? 'selected' : ''}>往房外開</option></select></label>`)).join('')}
         <button data-adddoor>＋ 新增門</button>
 
         <div class="lbl">窗戶</div>
-        ${(r.windows || []).map((w, j) => `
-          <div class="door" data-win="${w.id}">
-            <div class="dhead"><b>窗 ${j + 1}</b><button class="ghost x danger" data-delwin="${w.id}">刪除</button></div>
-            <div class="grid2">
-              <label>在哪面牆<select data-k="ww${w.id}" data-wk="wall">${walls.map((x, i) => `<option value="${i}" ${w.wall === i ? 'selected' : ''}>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）</option>`).join('')}</select></label>
-              <label>距角 ${cornerName(w.wall)}（cm）<input data-k="wo${w.id}" data-wk="off" type="number" inputmode="decimal" step="0.1" value="${cm(w.off)}"></label>
-              <label>窗寬（cm）<input data-k="wd${w.id}" data-wk="w" type="number" inputmode="decimal" step="0.1" value="${cm(w.w)}"></label>
-              <label>窗高（cm）<input data-k="wh${w.id}" data-wk="h" type="number" inputmode="decimal" step="0.1" value="${cm(w.h)}"></label>
-              <label>窗台離地（cm）<input data-k="ws${w.id}" data-wk="sill" type="number" inputmode="decimal" step="0.1" value="${cm(w.sill)}"></label>
-              <label>開在<select data-k="wt${w.id}" data-wk="host">${hostOpts(r, w)}</select></label>
-              <label>玻璃<select data-k="wg${w.id}" data-wk="glass">${glassOpts(w)}</select></label>
-            </div>
-          </div>`).join('')}
+        ${(r.windows || []).map((w, j) => card('win', w.id, nm(w, `窗 ${j + 1}`),
+          `${w.host ? nm(r.boxes.find(b => b.id === w.host), '量體') + ' 正面' : `牆 ${w.wall + 1}`}・${cm(w.w)}×${cm(w.h)}・窗台 ${cm(w.sill)}${w.glass === 'frosted' ? '・霧面' : ''}`, `
+            <label class="span2">名稱<input data-k="wn${w.id}" data-wk="name" value="${esc(w.name || '')}" placeholder="窗 ${j + 1}（例如：冷氣窗）"></label>
+            <label>在哪面牆<select data-k="ww${w.id}" data-wk="wall">${wallOpts(walls, w.wall)}</select></label>
+            <label>距角 ${cornerName(w.wall)}（cm）<input data-k="wo${w.id}" data-wk="off" type="number" inputmode="decimal" step="0.1" value="${cm(w.off)}"></label>
+            <label>窗寬（cm）<input data-k="wd${w.id}" data-wk="w" type="number" inputmode="decimal" step="0.1" value="${cm(w.w)}"></label>
+            <label>窗高（cm）<input data-k="wh${w.id}" data-wk="h" type="number" inputmode="decimal" step="0.1" value="${cm(w.h)}"></label>
+            <label>窗台離地（cm）<input data-k="ws${w.id}" data-wk="sill" type="number" inputmode="decimal" step="0.1" value="${cm(w.sill)}"></label>
+            <label>開在<select data-k="wt${w.id}" data-wk="host">${hostOpts(r, w)}</select></label>
+            <label>玻璃<select data-k="wg${w.id}" data-wk="glass">${glassOpts(w)}</select></label>`)).join('')}
         <button data-addwin>＋ 新增窗戶</button>
         <p class="mute small">也可以在平面圖點一面牆，進入牆面視圖直接拖曳窗戶、用邊設定距離。</p>
 
         <div class="lbl">牆面量體</div>
-        <p class="mute small">貼著牆凸出的箱體，例如舊冷氣窗台、樑、管道間。窗戶可以開在它的正面。</p>
-        ${(r.boxes || []).map((b, j) => `
-          <div class="door" data-box="${b.id}">
-            <div class="dhead"><b>量體 ${j + 1}</b><button class="ghost x danger" data-delbox="${b.id}">刪除</button></div>
-            <div class="grid2">
-              <label>在哪面牆<select data-k="bw${b.id}" data-bk="wall">${walls.map((x, i) => `<option value="${i}" ${b.wall === i ? 'selected' : ''}>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）</option>`).join('')}</select></label>
-              <label>距角 ${cornerName(b.wall)}（cm）<input data-k="bo${b.id}" data-bk="off" type="number" inputmode="decimal" step="0.1" value="${cm(b.off)}"></label>
-              <label>寬（cm）<input data-k="bd${b.id}" data-bk="w" type="number" inputmode="decimal" step="0.1" value="${cm(b.w)}"></label>
-              <label>凸出深度（cm）<input data-k="bp${b.id}" data-bk="depth" type="number" inputmode="decimal" step="0.1" value="${cm(b.depth)}"></label>
-              <label>底部離地（cm）<input data-k="bb${b.id}" data-bk="bottom" type="number" inputmode="decimal" step="0.1" value="${cm(b.bottom)}"></label>
-              ${b.toCeil ? '' : `<label>高（cm）<input data-k="bh${b.id}" data-bk="h" type="number" inputmode="decimal" step="0.1" value="${cm(b.h)}"></label>`}
-            </div>
-            <label class="chk"><input type="checkbox" data-k="bc${b.id}" data-bk="toCeil" ${b.toCeil ? 'checked' : ''}> 頂到天花板</label>
-          </div>`).join('')}
+        <p class="mute small">貼著牆凸出的箱體，例如舊冷氣窗台、管道間。窗戶可以開在它的正面。</p>
+        ${(r.boxes || []).map((b, j) => card('box', b.id, nm(b, `量體 ${j + 1}`),
+          `牆 ${b.wall + 1}・寬 ${cm(b.w)}・凸 ${cm(b.depth)}・${b.toCeil ? '頂到天花板' : `高 ${cm(b.h)}`}`, `
+            <label class="span2">名稱<input data-k="bn${b.id}" data-bk="name" value="${esc(b.name || '')}" placeholder="量體 ${j + 1}（例如：冷氣窗台）"></label>
+            <label>在哪面牆<select data-k="bw${b.id}" data-bk="wall">${wallOpts(walls, b.wall)}</select></label>
+            <label>距角 ${cornerName(b.wall)}（cm）<input data-k="bo${b.id}" data-bk="off" type="number" inputmode="decimal" step="0.1" value="${cm(b.off)}"></label>
+            <label>寬（cm）<input data-k="bd${b.id}" data-bk="w" type="number" inputmode="decimal" step="0.1" value="${cm(b.w)}"></label>
+            <label>凸出深度（cm）<input data-k="bp${b.id}" data-bk="depth" type="number" inputmode="decimal" step="0.1" value="${cm(b.depth)}"></label>
+            <label>底部離地（cm）<input data-k="bb${b.id}" data-bk="bottom" type="number" inputmode="decimal" step="0.1" value="${cm(b.bottom)}"></label>
+            ${b.toCeil ? '' : `<label>高（cm）<input data-k="bh${b.id}" data-bk="h" type="number" inputmode="decimal" step="0.1" value="${cm(b.h)}"></label>`}
+            <label class="chk span2"><input type="checkbox" data-k="bc${b.id}" data-bk="toCeil" ${b.toCeil ? 'checked' : ''}> 頂到天花板</label>`)).join('')}
         <button data-addbox>＋ 新增量體</button>
+
+        <div class="lbl">樑</div>
+        <p class="mute small">天花板上凸出來的樑。設定它和哪面牆平行、離那面牆多遠，會自動延伸到對面的牆。</p>
+        ${(r.beams || []).map((bm, j) => card('beam', bm.id, nm(bm, `樑 ${j + 1}`),
+          `平行牆 ${bm.wall + 1}・距牆 ${cm(bm.dist)}・寬 ${cm(bm.w)}・下垂 ${cm(bm.drop)}`, `
+            <label class="span2">名稱<input data-k="mn${bm.id}" data-mk="name" value="${esc(bm.name || '')}" placeholder="樑 ${j + 1}"></label>
+            <label>和哪面牆平行<select data-k="mw${bm.id}" data-mk="wall">${wallOpts(walls, bm.wall)}</select></label>
+            <label>離那面牆（cm）<input data-k="md${bm.id}" data-mk="dist" type="number" inputmode="decimal" step="0.1" value="${cm(bm.dist)}"></label>
+            <label>樑寬（cm）<input data-k="mb${bm.id}" data-mk="w" type="number" inputmode="decimal" step="0.1" value="${cm(bm.w)}"></label>
+            <label>從天花板下垂（cm）<input data-k="mh${bm.id}" data-mk="drop" type="number" inputmode="decimal" step="0.1" value="${cm(bm.drop)}"></label>`)).join('')}
+        <button data-addbeam>＋ 新增樑</button>
+
+        <div class="lbl">踢腳線</div>
+        <label class="chk"><input type="checkbox" data-k="skOn" ${r.skirting?.on ? 'checked' : ''}> 有踢腳線（沿所有牆，門洞處自動斷開）</label>
+        ${r.skirting?.on ? `<div class="grid3">
+          <label>高（cm）<input data-k="skH" type="number" inputmode="decimal" step="0.1" value="${cm(r.skirting.h)}"></label>
+          <label>厚（cm）<input data-k="skT" type="number" inputmode="decimal" step="0.1" value="${cm(r.skirting.t)}"></label>
+          <label>顏色<input data-k="skC" type="color" value="${esc(r.skirting.color)}"></label>
+        </div>
+        <p class="mute small">傢俱拖到牆邊會貼齊踢腳線表面；設定距離時也可以選踢腳線當基準。</p>` : ''}
 
         <div class="lbl">牆外是什麼（日照用）</div>
         <p class="mute small">只有外牆上的門窗會有陽光照進來。外面是走道、樓梯間或其他房間的牆，請設成「室內」。</p>
@@ -611,7 +659,8 @@ $('#tab-room').addEventListener('change', async e => {
     const id = t.closest('[data-win]').dataset.win;
     roomChange(r => {
       const w = r.windows.find(x => x.id === id);
-      if (wk === 'host' || wk === 'glass') setWinOpt(r, w, wk, t.value);
+      if (wk === 'name') w.name = t.value.trim();
+      else if (wk === 'host' || wk === 'glass') setWinOpt(r, w, wk, t.value);
       else if (wk === 'wall') { w.wall = +t.value; w.host = null; }
       else { const v = toMM(t.value); if (v >= 0) w[wk] = v; }
     }, false);
@@ -622,27 +671,50 @@ $('#tab-room').addEventListener('change', async e => {
     const id = t.closest('[data-box]').dataset.box;
     roomChange(r => {
       const b = r.boxes.find(x => x.id === id);
-      if (bk === 'wall') { b.wall = +t.value; r.windows.forEach(w => { if (w.host === b.id) w.wall = b.wall; }); }
+      if (bk === 'name') b.name = t.value.trim();
+      else if (bk === 'wall') { b.wall = +t.value; r.windows.forEach(w => { if (w.host === b.id) w.wall = b.wall; }); }
       else if (bk === 'toCeil') { b.toCeil = t.checked; if (!b.toCeil && !b.h) b.h = Math.max(100, r.height - b.bottom); }
       else { const v = toMM(t.value); if (v >= 0) b[bk] = v; }
     }, false);
     return;
   }
+  const mk = t.dataset.mk;
+  if (mk) {
+    const id = t.closest('[data-beam]').dataset.beam;
+    roomChange(r => {
+      const bm = r.beams.find(x => x.id === id);
+      if (mk === 'name') bm.name = t.value.trim();
+      else if (mk === 'wall') bm.wall = +t.value;
+      else { const v = toMM(t.value); if (v >= 0) bm[mk] = v; }
+    }, false);
+    return;
+  }
+  if (k === 'skOn') { roomChange(r => { r.skirting = { ...(r.skirting || { h: 80, t: 12, color: '#f3f0ea' }), on: t.checked }; }, false); return; }
+  if (k === 'skH' || k === 'skT') { const v = toMM(t.value); if (v >= 0) roomChange(r => { r.skirting[k === 'skH' ? 'h' : 't'] = v; }, false); return; }
+  if (k === 'skC') { roomChange(r => { r.skirting.color = t.value; }, false); return; }
   const dk = t.dataset.dk;
   if (dk) {
     const id = t.closest('[data-door]').dataset.door;
     roomChange(r => {
       const d = r.doors.find(x => x.id === id);
-      if (dk === 'wall') d.wall = +t.value;
+      if (dk === 'name') d.name = t.value.trim();
+      else if (dk === 'wall') d.wall = +t.value;
       else if (dk === 'hinge' || dk === 'swing') d[dk] = t.value;
       else { const v = toMM(t.value); if (v >= 0) d[dk] = v; }
     }, false);
   }
 });
 
+$('#tab-room').addEventListener('toggle', e => {
+  const id = e.target.dataset?.card;
+  if (!id) return;
+  if (e.target.open) openCards.add(id); else openCards.delete(id);
+  saveOpen();
+}, true);
 $('#tab-room').addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b) return;
+  if (b.closest('summary')) e.preventDefault();
   const p = P();
   if (b.dataset.mode && b.dataset.mode !== p.room.mode) {
     roomChange(r => {
@@ -654,6 +726,7 @@ $('#tab-room').addEventListener('click', async e => {
         r.doors.forEach(d => { d.wall = Math.min(d.wall, 3); });
         r.windows.forEach(w => { w.wall = Math.min(w.wall, 3); });
         r.boxes.forEach(b => { b.wall = Math.min(b.wall, 3); });
+        r.beams.forEach(b => { b.wall = Math.min(b.wall, 3); });
         r.interior = r.interior.filter(i => i < 4);
         p.layouts.forEach(l => l.items.forEach(it => { if (it.wall != null) it.wall = Math.min(it.wall, 3); }));
       }
@@ -673,6 +746,7 @@ $('#tab-room').addEventListener('click', async e => {
       r.boxes = r.boxes.filter(b => b.wall !== i).map(b => ({ ...b, wall: b.wall > i ? b.wall - 1 : b.wall }));
       r.windows.forEach(w => { if (gone.has(w.host)) w.host = null; });
       r.interior = r.interior.filter(x => x !== i).map(x => (x > i ? x - 1 : x));
+      r.beams = r.beams.filter(x => x.wall !== i).map(x => ({ ...x, wall: x.wall > i ? x.wall - 1 : x.wall }));
       // 掛在被刪掉那面牆上的畫一併移除，其他的牆號往前補
       for (const l of p.layouts) {
         l.items = l.items.filter(it => it.wall !== i);
@@ -683,17 +757,26 @@ $('#tab-room').addEventListener('click', async e => {
     return;
   }
   if (b.hasAttribute('data-adddoor')) {
-    roomChange(r => { r.doors.push({ id: uid(), wall: 0, off: 300, w: 800, h: 2100, hinge: 'start', swing: 'in' }); }, false);
+    const id = uid(); openCards.add(id); saveOpen();
+    roomChange(r => { r.doors.push({ id, wall: 0, off: 300, w: 800, h: 2100, hinge: 'start', swing: 'in' }); }, false);
     return;
   }
   if (b.hasAttribute('data-addwin')) {
-    roomChange(r => { r.windows.push({ id: uid(), wall: 0, off: 600, w: 1200, h: 1200, sill: 900 }); }, false);
+    const id = uid(); openCards.add(id); saveOpen();
+    roomChange(r => { r.windows.push({ id, wall: 0, off: 600, w: 1200, h: 1200, sill: 900 }); }, false);
     return;
   }
   if (b.hasAttribute('data-addbox')) {
-    roomChange(r => { r.boxes.push({ id: uid(), wall: 0, off: 0, w: 1000, depth: 500, bottom: 1900, h: 700, toCeil: true }); }, false);
+    const id = uid(); openCards.add(id); saveOpen();
+    roomChange(r => { r.boxes.push({ id, wall: 0, off: 0, w: 1000, depth: 500, bottom: 1900, h: 700, toCeil: true }); }, false);
     return;
   }
+  if (b.hasAttribute('data-addbeam')) {
+    const id = uid(); openCards.add(id); saveOpen();
+    roomChange(r => { r.beams.push({ id, wall: 0, dist: 1000, w: 300, drop: 400 }); }, false);
+    return;
+  }
+  if (b.dataset.delbeam) { roomChange(r => { r.beams = r.beams.filter(x => x.id !== b.dataset.delbeam); }, false); return; }
   if (b.dataset.delbox) {
     roomChange(r => { r.boxes = r.boxes.filter(x => x.id !== b.dataset.delbox); r.windows.forEach(w => { if (w.host === b.dataset.delbox) w.host = null; }); }, false);
     return;
@@ -912,13 +995,15 @@ function openMenu() {
       <li><b>鎖定</b>：鎖住的物件不會被拖動，但可以當距離基準。</li>
       <li><b>牆面（掛畫、窗戶）</b>：在平面圖點一面牆（或牆名標籤），切到牆面視圖。可以拖曳畫和窗戶，也能用「點邊 → 點基準邊」對齊天花板、門框、傢俱頂面或其他畫。</li>
       <li><b>牆面量體與外牆</b>：在「房間」可以新增貼牆凸出的量體（例如冷氣窗台），窗戶可以開在它的正面，玻璃可選透明或霧面。也可以標記哪些牆是室內牆：室內牆上的門窗不會有陽光照進來。</li>
+      <li><b>房間結構</b>：門、窗、量體、樑都可以自訂名稱，點標題可以折疊或展開。踢腳線打開後，傢俱會貼齊踢腳線表面。</li>
+      <li><b>標籤篩選</b>：物品庫上方點標籤就能篩選（選多個＝同時符合），例如「房東的」「自己的」。</li>
       <li><b>指北針</b>：點左下角的指北針可切換「房間擺正」和「正北朝上」，像 Google 地圖一樣。</li>
       <li><b>日照</b>：先在「房間」分頁設定座標和北方，再按「☀️ 日照」。拖日期和時間（或按 ▶ 播放一天），2D 會畫出陽光落在地板上的範圍（虛線＝被傢俱擋住的部分），3D 會模擬陽光從窗戶照進來。目前還沒計入周邊建物遮擋。</li>
       <li><b>量測線</b>：切到「量測線」模式，點兩條平行的邊，就會一直顯示它們之間的距離。</li>
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.4.1・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.5・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);

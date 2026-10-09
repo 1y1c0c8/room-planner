@@ -2,7 +2,7 @@
 import { S, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, emit, getImg } from './state.js';
 import { Elev } from './elev.js';
 import { V, segDist, cm, uid, clamp, normDeg } from './util.js';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth } from './geom.js';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs } from './geom.js';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -24,6 +24,7 @@ export class Plan2D {
     this.hover = null; this.snapHits = []; this.measureHits = [];
     this.active = true; this.needFit = true;
     this.ev = null;        // 牆面立面圖（開啟時取代平面圖）
+    this.beamLabels = [];
     this.viewRot = 0;      // 平面圖旋轉（弧度）；正北朝上時＝ -north
     this.northUp = false;
     this.wallHits = [];    // 牆名標籤的點擊範圍
@@ -184,6 +185,15 @@ export class Plan2D {
       ctx.beginPath(); ctx.moveTo(o1.x, o1.y); ctx.lineTo(o2.x, o2.y);
       ctx.lineCap = 'butt'; ctx.lineWidth = WALL_T + 2 / s; ctx.strokeStyle = floor; ctx.stroke();
     }
+    // 踢腳線：沿牆的細條（門洞處斷開）
+    const sk = p.room.skirting;
+    if (sk?.on) for (const W of walls) for (const [t0, t1] of skirtSegs(p.room, W.i, W)) {
+      const q = [V.add(W.a, V.scale(W.u, t0)), V.add(W.a, V.scale(W.u, t1))];
+      const r = [V.add(q[1], V.scale(W.n, Math.max(sk.t, 2 / s))), V.add(q[0], V.scale(W.n, Math.max(sk.t, 2 / s)))];
+      ctx.beginPath(); [...q, ...r].forEach((pt, k) => (k ? ctx.lineTo(pt.x, pt.y) : ctx.moveTo(pt.x, pt.y))); ctx.closePath();
+      ctx.fillStyle = sk.color; ctx.fill();
+      ctx.strokeStyle = 'rgba(60,50,40,.35)'; ctx.lineWidth = 0.8 / s; ctx.stroke();
+    }
     // 物件：地毯在下、傢俱在上；選到地毯時傢俱半透明，方便看被壓住的部分
     const items = lay.items.filter(it => lib(it.libId) && !isWall(lib(it.libId)));
     const sel = selItem();
@@ -210,7 +220,16 @@ export class Plan2D {
       ctx.setLineDash([6 / s, 5 / s]); ctx.lineWidth = 1.2 / s; ctx.stroke(); ctx.setLineDash([]);
     }
     this.drawWallThings(ctx, D);
+    (p.room.beams || []).forEach((bm, j) => {
+      const g = beamGeom(bm, walls);
+      if (!g) return;
+      ctx.beginPath(); g.quad.forEach((pt, k) => (k ? ctx.lineTo(pt.x, pt.y) : ctx.moveTo(pt.x, pt.y))); ctx.closePath();
+      ctx.fillStyle = 'rgba(90,80,70,.10)'; ctx.fill();
+      ctx.setLineDash([10 / s, 5 / s, 2 / s, 5 / s]); ctx.strokeStyle = 'rgba(70,60,50,.7)'; ctx.lineWidth = 1.3 / s; ctx.stroke(); ctx.setLineDash([]);
+      this.beamLabels.push({ at: V.mid(g.quad[0], g.quad[2]), text: `${nm(bm, `樑 ${j + 1}`)}（下垂 ${cm(bm.drop)}）` });
+    });
     ctx.restore();
+    for (const b of this.beamLabels.splice(0)) { const c = this.toS(b.at); ctx.font = '600 11px -apple-system, "PingFang TC", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; this.pill(ctx, c.x, c.y, b.text, 'rgba(255,253,249,.85)', '#6b5f52'); }
 
     this.drawWallLabels(ctx, D);
     this.drawItemLabels(ctx, items);
@@ -292,14 +311,14 @@ export class Plan2D {
       const W = D.walls[bx.wall];
       if (!W) return;
       const a = V.add(W.a, V.scale(W.u, bx.off)), b = V.add(W.a, V.scale(W.u, bx.off + bx.w));
-      out.push({ kind: 'box', id: bx.id, wall: bx.wall, label: `量體 ${j + 1}`, quad: [a, b, V.add(b, V.scale(W.n, bx.depth)), V.add(a, V.scale(W.n, bx.depth))], a, b, W });
+      out.push({ kind: 'box', id: bx.id, wall: bx.wall, label: nm(bx, `量體 ${j + 1}`), quad: [a, b, V.add(b, V.scale(W.n, bx.depth)), V.add(a, V.scale(W.n, bx.depth))], a, b, W });
     });
     (D.p.room.windows || []).forEach((w, j) => {
       const W = D.walls[w.wall];
       if (!W) return;
       const dp = winDepth(D.p.room, w), o = V.scale(W.n, dp);
       const a = V.add(V.add(W.a, V.scale(W.u, w.off)), o), b = V.add(V.add(W.a, V.scale(W.u, w.off + w.w)), o);
-      out.push({ kind: 'win', id: w.id, wall: w.wall, label: `窗 ${j + 1}`, frosted: w.glass === 'frosted', quad: [a, b, V.add(b, V.scale(W.n, -T)), V.add(a, V.scale(W.n, -T))], a, b, W });
+      out.push({ kind: 'win', id: w.id, wall: w.wall, label: nm(w, `窗 ${j + 1}`), frosted: w.glass === 'frosted', quad: [a, b, V.add(b, V.scale(W.n, -T)), V.add(a, V.scale(W.n, -T))], a, b, W });
     });
     for (const it of D.lay.items) {
       const li = lib(it.libId);
@@ -513,7 +532,7 @@ export class Plan2D {
     for (const e of itemEdges(it, li)) {
       let best = null;
       for (const r of D.refs) {
-        if (r.owner === it.id || r.kind === 'door' || !isParallel(e, r)) continue;
+        if (r.owner === it.id || r.kind === 'door' || r.kind === 'beam' || r.kind === 'box' || !isParallel(e, r)) continue;
         const s = V.dot(V.sub(r.a, e.mid), e.n);
         if (s < -0.5) continue;
         const ta = V.dot(V.sub(r.a, e.a), e.u), tb = V.dot(V.sub(r.b, e.a), e.u);
@@ -784,7 +803,7 @@ export class Plan2D {
   // 拖曳時貼齊平行邊（貼平）
   edgeSnap(it, tolW) {
     const li = lib(it.libId);
-    const refs = this.D.refs.filter(r => r.owner !== it.id);
+    const refs = this.D.refs.filter(r => r.owner !== it.id && r.kind !== 'beam' && r.kind !== 'box');
     const pass = exclN => {
       let b = null;
       for (const e of itemEdges(it, li)) for (const r of refs) {

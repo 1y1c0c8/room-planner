@@ -1,7 +1,7 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
 import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit } from './state.js';
 import { V, segDist, cm, clamp } from './util.js';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T } from './geom.js';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs } from './geom.js';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
@@ -44,11 +44,11 @@ export class Elev {
     (p.room.boxes || []).forEach((b, j) => {
       if (b.wall !== this.wall) return;
       const h = b.toCeil ? H - b.bottom : b.h;
-      objs.push({ kind: 'box', id: b.id, ref: b, x: X(b.off + b.w / 2), z: b.bottom + h / 2, w: b.w, h, locked: false, label: `量體 ${j + 1}` });
+      objs.push({ kind: 'box', id: b.id, ref: b, x: X(b.off + b.w / 2), z: b.bottom + h / 2, w: b.w, h, locked: false, label: nm(b, `量體 ${j + 1}`) });
     });
     (p.room.windows || []).forEach((w, j) => {
       if (w.wall !== this.wall) return;
-      objs.push({ kind: 'win', id: w.id, ref: w, x: X(w.off + w.w / 2), z: w.sill + w.h / 2, w: w.w, h: w.h, locked: false, label: `窗 ${j + 1}`, frosted: w.glass === 'frosted' });
+      objs.push({ kind: 'win', id: w.id, ref: w, x: X(w.off + w.w / 2), z: w.sill + w.h / 2, w: w.w, h: w.h, locked: false, label: nm(w, `窗 ${j + 1}`), frosted: w.glass === 'frosted' });
     });
     for (const it of lay.items) {
       const li = lib(it.libId);
@@ -57,7 +57,7 @@ export class Elev {
     }
     const doors = (p.room.doors || []).map((d, j) => ({ d, j })).filter(o => o.d.wall === this.wall).map(({ d, j }) => {
       const a = X(d.off), b = X(d.off + d.w);
-      return { id: d.id, x0: Math.min(a, b), x1: Math.max(a, b), h: Math.min(d.h, H), label: `門 ${j + 1}` };
+      return { id: d.id, x0: Math.min(a, b), x1: Math.max(a, b), h: Math.min(d.h, H), label: nm(d, `門 ${j + 1}`) };
     });
     // 靠近這面牆的落地傢俱：投影成側影，頂面可當基準（例如「畫的下緣距櫃子頂面 25 cm」）
     const furn = [];
@@ -75,8 +75,27 @@ export class Elev {
     }
     furn.sort((a, b) => b.dist - a.dist);
 
+    const beams = [];
+    (p.room.beams || []).forEach((bm, j) => {
+      const g = beamGeom(bm, walls);
+      if (!g) return;
+      const ts = g.quad.map(q => V.dot(V.sub(q, W.a), W.u));
+      const t0 = Math.max(0, Math.min(...ts)), t1 = Math.min(Lw, Math.max(...ts));
+      if (t1 - t0 < 1) return;
+      const a = X(t0), b = X(t1);
+      beams.push({ id: bm.id, x0: Math.min(a, b), x1: Math.max(a, b), z0: H - bm.drop, label: nm(bm, `樑 ${j + 1}`) });
+    });
+    const sk = p.room.skirting?.on ? p.room.skirting : null;
+    const skirt = sk ? skirtSegs(p.room, this.wall, W).map(([t0, t1]) => { const a = X(t0), b = X(t1); return [Math.min(a, b), Math.max(a, b)]; }) : [];
+
     const refs = [];
     const add = (a, b, nn, label, owner, key) => refs.push({ ...mk(a, b, nn), label, owner, key });
+    for (const bm of beams) {
+      add({ x: bm.x0, y: bm.z0 }, { x: bm.x1, y: bm.z0 }, { x: 0, y: -1 }, `${bm.label} 底面`, bm.id, `b0${bm.id}`);
+      add({ x: bm.x0, y: bm.z0 }, { x: bm.x0, y: H }, { x: -1, y: 0 }, `${bm.label} 側邊`, bm.id, `b1${bm.id}`);
+      add({ x: bm.x1, y: bm.z0 }, { x: bm.x1, y: H }, { x: 1, y: 0 }, `${bm.label} 側邊`, bm.id, `b2${bm.id}`);
+    }
+    skirt.forEach(([x0, x1], k) => add({ x: x0, y: sk.h }, { x: x1, y: sk.h }, { x: 0, y: 1 }, '踢腳線上緣', null, `sk${k}`));
     const lc = cornerName(flip ? (this.wall + 1) % n : this.wall), rc = cornerName(flip ? this.wall : (this.wall + 1) % n);
     add({ x: 0, y: 0 }, { x: Lw, y: 0 }, { x: 0, y: 1 }, '地板', null, 'floor');
     add({ x: 0, y: H }, { x: Lw, y: H }, { x: 0, y: -1 }, '天花板', null, 'ceil');
@@ -93,7 +112,7 @@ export class Elev {
       add({ x: f.x1, y: 0 }, { x: f.x1, y: f.h }, { x: 1, y: 0 }, `${f.li.name} 側邊`, f.id, `f2${f.id}`);
     }
     for (const o of objs) objEdges(o).forEach(e => refs.push({ ...e, label: o.label, owner: o.id, key: `o${e.i}${o.id}` }));
-    return { p, lay, W, L: Lw, H, flip, objs, doors, furn, refs, lc, rc };
+    return { p, lay, W, L: Lw, H, flip, objs, doors, furn, refs, lc, rc, beams, skirt, sk };
   }
 
   setPos(D, o, x, z) {
@@ -170,6 +189,20 @@ export class Elev {
     ctx.fillRect(A.x - T, A.y - T, B.x - A.x + 2 * T, B.y - A.y + T);
     ctx.fillStyle = D.p.room.wallColor;
     ctx.fillRect(A.x, A.y, B.x - A.x, B.y - A.y);
+    // 踢腳線
+    for (const [x0, x1] of D.skirt) {
+      this.rect(ctx, x0, 0, x1, D.sk.h);
+      ctx.fillStyle = D.sk.color; ctx.fill();
+      ctx.strokeStyle = 'rgba(60,50,40,.35)'; ctx.lineWidth = 1; ctx.stroke();
+    }
+    // 樑（從天花板往下凸）
+    for (const bm of D.beams) {
+      this.rect(ctx, bm.x0, bm.z0, bm.x1, D.H);
+      ctx.fillStyle = 'rgba(90,80,70,.16)'; ctx.fill();
+      ctx.setLineDash([8, 4, 2, 4]); ctx.strokeStyle = 'rgba(70,60,50,.7)'; ctx.lineWidth = 1.3; ctx.stroke(); ctx.setLineDash([]);
+      const c = this.toS({ x: (bm.x0 + bm.x1) / 2, y: (bm.z0 + D.H) / 2 });
+      this.label(ctx, c.x, c.y, bm.label, 11, '#5b524a');
+    }
     // 門
     for (const d of D.doors) {
       this.rect(ctx, d.x0, 0, d.x1, d.h);

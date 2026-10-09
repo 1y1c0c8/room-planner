@@ -126,6 +126,16 @@ p { margin: 0; }
 .wname small { color: var(--mute); font-weight: 400; }
 .closure { font-size: 13px; background: var(--accent-soft); border-radius: 10px; padding: 7px 10px; }
 .closure.bad { background: #fbe9e1; color: var(--warn); }
+.ccard { padding: 0; }
+.ccard > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; }
+.ccard > summary::-webkit-details-marker { display: none; }
+.ccard > summary::before { content: '▸'; color: var(--mute); font-size: 11px; transition: transform .15s; }
+.ccard[open] > summary::before { transform: rotate(90deg); }
+.ctitle { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.ctitle small { color: var(--mute); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ccard[open] .ctitle small { display: none; }
+.cbody { padding: 0 10px 10px; }
+.span2 { grid-column: 1 / -1; }
 .extlist { display: flex; flex-direction: column; gap: 6px; }
 .extrow { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 .door { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #fffaf3; }
@@ -147,6 +157,10 @@ p { margin: 0; }
 .lc-act button { padding: 4px 10px; font-size: 13px; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .tag { font-size: 11px; background: var(--chip); border-radius: 6px; padding: 1px 6px; color: var(--mute); }
+.tagbar { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.tagf { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #fff; }
+.tagf.on { background: var(--accent-soft); border-color: #bcd9d5; color: var(--accent); }
+button.tag { border: 0; cursor: pointer; font: inherit; font-size: 11px; }
 .tag.on { background: var(--accent-soft); color: var(--accent); }
 .empty { text-align: center; color: var(--mute); padding: 30px 10px; }
 

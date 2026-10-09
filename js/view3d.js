@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth } from './geom.js';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs } from './geom.js';
 import { V, pointInPoly, segDist, clamp } from './util.js';
 
 const M = 0.001; // mm → m
@@ -291,6 +291,34 @@ export class View3D {
       face([[0, z0], [depth, z0], [depth, z1], [0, z1]], (u, v) => P3(t0, u, v), uV.clone().negate()); // 左右側面
       face([[0, z0], [depth, z0], [depth, z1], [0, z1]], (u, v) => P3(t1, u, v), uV);
     });
+
+    // 樑：從天花板往下凸的長方體
+    (room.beams || []).forEach(bm => {
+      const g = beamGeom(bm, walls);
+      if (!g || bm.drop < 5 || bm.w < 5) return;
+      const len = g.t1 - g.t0;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(len * M, bm.drop * M, bm.w * M), wallMat);
+      const c = V.add(V.add(g.W.a, V.scale(g.W.u, (g.t0 + g.t1) / 2)), V.scale(g.W.n, bm.dist + bm.w / 2));
+      mesh.position.set(c.x * M, (H - bm.drop / 2) * M, c.y * M);
+      mesh.rotation.y = -Math.atan2(g.W.u.y, g.W.u.x);
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
+      this.casters.push(mesh);
+    });
+    // 踢腳線
+    const sk = room.skirting;
+    if (sk?.on && sk.h > 0) {
+      const skMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(sk.color), roughness: 0.6 });
+      this.disposables.push(skMat);
+      walls.forEach((W, i) => skirtSegs(room, i, W).forEach(([t0, t1]) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry((t1 - t0) * M, sk.h * M, Math.max(sk.t, 3) * M), skMat);
+        const c = V.add(V.add(W.a, V.scale(W.u, (t0 + t1) / 2)), V.scale(W.n, Math.max(sk.t, 3) / 2));
+        m.position.set(c.x * M, (sk.h / 2) * M, c.y * M);
+        m.rotation.y = -Math.atan2(W.u.y, W.u.x);
+        m.receiveShadow = true;
+        this.group.add(m);
+      }));
+    }
 
     // 物件
     let rugN = 0;
