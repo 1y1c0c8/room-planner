@@ -1,6 +1,7 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
 import { db } from './db.js';
 import { uid } from './util.js';
+import { buildRoom, wallEdges } from './geom.js';
 
 export const S = {
   library: [],
@@ -117,12 +118,35 @@ export function pruneMeasures(lay) {
 }
 
 // ---------- 物品庫 ----------
+// 物件位置自我修復：物品庫改了類型（地板物件 ⇄ 牆面物件）時，已放進空間的那些份要跟著轉換
+const ok = v => typeof v === 'number' && Number.isFinite(v);
+export function sanitizeProject(p) {
+  const walls = wallEdges(buildRoom(p.room).poly), H = p.room.height;
+  const xs = walls.map(w => w.a.x), ys = walls.map(w => w.a.y);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  let fixed = 0;
+  for (const l of p.layouts) for (const it of l.items) {
+    const li = lib(it.libId);
+    if (!li) continue;
+    if (isWall(li)) {
+      if (!ok(it.wall) || !walls[it.wall]) { it.wall = 0; fixed++; }
+      if (!ok(it.off)) { it.off = Math.round(walls[it.wall].len / 2); fixed++; }
+      if (!ok(it.elev)) { it.elev = Math.min(Math.max(li.h / 2 + 50, 1450), H - li.h / 2 - 50); fixed++; }
+    } else {
+      if (!ok(it.x) || !ok(it.y)) { it.x = Math.round(cx); it.y = Math.round(cy); fixed++; }
+      if (!ok(it.rot)) { it.rot = 0; fixed++; }
+    }
+  }
+  return fixed;
+}
+
 export async function saveLib(item) {
   item.updated = Date.now();
   const i = S.library.findIndex(x => x.id === item.id);
   if (i < 0) S.library.push(item); else S.library[i] = item;
   await db.put('library', item);
-  emit('library');
+  for (const p of S.projects) if (sanitizeProject(p)) { p.updated = Date.now(); await db.put('projects', p); }
+  emit('library'); emit('project');
 }
 export function usage(id) {
   return S.projects.filter(p => p.layouts.some(l => l.items.some(it => it.libId === id)));
@@ -192,6 +216,7 @@ export async function loadAll() {
     await db.put('projects', p);
   }
   for (const p of S.projects) { p.room.windows ||= []; p.room.boxes ||= []; p.room.interior ||= []; } // 舊版資料補欄位
+  for (const p of S.projects) if (sanitizeProject(p)) await db.put('projects', p);
   S.projectId = last && S.projects.some(p => p.id === last.value) ? last.value : S.projects[0].id;
   try { await navigator.storage?.persist?.(); } catch { /* 不支援就算了 */ }
 }
@@ -227,6 +252,7 @@ export async function importData(data) {
   S.library = await db.all('library');
   S.projects = await db.all('projects');
   for (const p of S.projects) { p.room.windows ||= []; p.room.boxes ||= []; p.room.interior ||= []; }
+  for (const p of S.projects) if (sanitizeProject(p)) await db.put('projects', p);
   if (!S.projects.some(p => p.id === S.projectId)) S.projectId = S.projects[0]?.id;
   S.sel = null;
   clearHistory();
