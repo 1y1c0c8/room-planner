@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs } from './geom.js';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom } from './geom.js';
 import { V, pointInPoly, segDist, clamp } from './util.js';
 
 const M = 0.001; // mm → m
@@ -61,6 +61,8 @@ export class View3D {
     this.scene.add(this.hemi, this.amb);
     this.sunState = null; // 日照模式：{ d:{x,y} 朝太陽的水平方向, alt 仰角（度） }
     this.casters = [];    // 日照模式時要擋光的牆與天花板
+    this.doorObjs = [];   // 可開關的門片 { id, pivot, g, cur, target, base }
+    this.doorOpen = new Map(); // 門 id → 是否開著（重建場景時保留）
     const sun = (this.sun = new THREE.DirectionalLight(0xfff3e2, 1.5));
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -150,6 +152,7 @@ export class View3D {
 
   rebuild() {
     this.clear();
+    this.doorObjs = [];
     this.dirty = false;
     const p = P();
     if (!p) return;
@@ -252,19 +255,23 @@ export class View3D {
           this.casters.push(back);
         }
       }
-      // 門框
+      // 門框（在門洞內側，固定不動）
       for (const d of doors) {
-        const dh = Math.min(d.h, H - 20);
+        const dh = Math.min(d.h, H - 20), fw = Math.max(doorGeom(d, walls).fw, 8);
+        const fm = d.frameColor ? new THREE.MeshStandardMaterial({ color: new THREE.Color(d.frameColor), roughness: 0.7 }) : frameMat;
+        if (fm !== frameMat) this.disposables.push(fm);
         const add = (u, len, hgt, y) => {
-          const fr = new THREE.Mesh(new THREE.BoxGeometry(len * M, hgt * M, 0.11), frameMat);
+          const fr = new THREE.Mesh(new THREE.BoxGeometry(len * M, hgt * M, 0.11), fm);
           const pt = V.add(V.add(w.a, V.scale(w.u, u)), V.scale(w.n, -45));
           fr.position.set(pt.x * M, y * M, pt.y * M);
           fr.rotation.y = -Math.atan2(w.u.y, w.u.x);
+          fr.castShadow = true;
           this.group.add(fr);
         };
-        add(d.off - 15, 30, dh, dh / 2);
-        add(d.off + d.w + 15, 30, dh, dh / 2);
-        add(d.off + d.w / 2, d.w + 60, 30, dh + 15);
+        add(d.off + fw / 2, fw, dh, dh / 2);
+        add(d.off + d.w - fw / 2, fw, dh, dh / 2);
+        add(d.off + d.w / 2, d.w, fw, dh - fw / 2);
+        this.makeDoorLeaf(d, walls, H);
       }
     });
 
@@ -320,7 +327,8 @@ export class View3D {
       }));
     }
 
-    // 物件
+    // 物件（先記下門片，貼在門上的物件要掛到門片底下）
+    const leafOf = new Map(this.doorObjs.map(o => [o.id, o]));
     let rugN = 0;
     this.col = { poly, walls, items: [], door: null };
     const d0 = (room.doors || [])[0];
@@ -332,7 +340,10 @@ export class View3D {
     for (const it of lay.items) {
       const li = lib(it.libId);
       if (!li) continue;
-      if (isWall(li)) { const m = this.makeArt(it, li, walls); if (m) this.group.add(m); continue; }
+      if (isWall(li)) {
+        if (it.host && leafOf.has(it.host)) { this.makeDoorArt(it, li, leafOf.get(it.host)); continue; }
+        const m = this.makeArt(it, li, walls); if (m) this.group.add(m); continue;
+      }
       const rug = isRug(li);
       const mesh = this.makeItem(it, li, rug ? rugN++ : 0);
       this.group.add(mesh);
@@ -415,6 +426,75 @@ export class View3D {
   }
 
   // 牆面物件：正面朝房內，厚度往房內凸出
+  // 門片：繞著門框內緣的轉軸轉；兩面可貼皮
+  makeDoorLeaf(d, walls, H) {
+    const g = doorGeom(d, walls);
+    if (!g) return;
+    const ft = d.ft || 40, lw = g.leafW, lh = Math.min(g.leafH, H - 20);
+    const edge = new THREE.MeshStandardMaterial({ color: new THREE.Color(d.leafColor || '#d8d0c4'), roughness: 0.6 });
+    const img = d.tex ? getImg(d.tex) : null;
+    const face = img ? new THREE.MeshStandardMaterial({ map: this.baseTex(d.tex, img), roughness: 0.6 }) : edge;
+    this.disposables.push(edge);
+    if (face !== edge) this.disposables.push(face);
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(lw * M, lh * M, ft * M), [edge, edge, edge, edge, face, face]);
+    // 轉軸座標系：local x＝從轉軸往關門方向；房內那一面是 local z 的 side 方向
+    const side = Math.sign(V.dot({ x: -g.close.y, y: g.close.x }, g.W.n)) || 1;
+    leaf.position.set((lw / 2) * M, (lh / 2) * M, -side * (ft / 2 + 10) * M);
+    leaf.castShadow = true; leaf.receiveShadow = true;
+    leaf.userData.doorId = d.id;
+    const pivot = new THREE.Group();
+    pivot.position.set(g.hinge.x * M, 0, g.hinge.y * M);
+    pivot.add(leaf);
+    this.group.add(pivot);
+    const base = g.angle > 0.5 ? g.angle : 90;
+    const isOpen = this.doorOpen.has(d.id) ? this.doorOpen.get(d.id) : g.angle > 0.5;
+    const o = { id: d.id, pivot, g, side, ft, base, target: isOpen ? base : 0, cur: isOpen ? base : 0 };
+    this.setLeaf(o);
+    this.doorObjs.push(o);
+  }
+  setLeaf(o) {
+    const th = (o.cur * Math.PI) / 180, g = o.g;
+    const dx = g.close.x * Math.cos(th) + g.open.x * Math.sin(th), dy = g.close.y * Math.cos(th) + g.open.y * Math.sin(th);
+    o.pivot.rotation.y = -Math.atan2(dy, dx);
+  }
+  // 貼在門片上的物件：掛在門片的轉軸底下，開門時一起轉
+  makeDoorArt(it, li, o) {
+    const dd = Math.max(li.d, 2);
+    const mats = [
+      this.mat(li, 'side', li.d, li.h), this.mat(li, 'side', li.d, li.h),
+      this.mat(li, 'side', li.w, li.d), this.mat(li, 'side', li.w, li.d),
+      this.mat(li, 'top', li.w, li.h), this.mat(li, 'bottom', li.w, li.h),
+    ];
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(li.w * M, li.h * M, dd * M), mats);
+    const t = P().room.doors.find(x => x.id === it.host).off + it.off;
+    const out = it.face === 'out';
+    const z = out ? -o.side * (o.ft + 10 + dd / 2 + 1) : -o.side * (10 - dd / 2 - 1);
+    mesh.position.set(Math.abs(t - o.g.hingeT) * M, it.elev * M, z * M);
+    const faceDir = out ? -o.side : o.side; // 正面朝外
+    if (faceDir < 0) mesh.rotation.y = Math.PI;
+    mesh.castShadow = true;
+    mesh.userData.doorId = it.host;
+    o.pivot.add(mesh);
+  }
+  // 點門：開 ⇄ 關
+  toggleDoor(id) {
+    const o = this.doorObjs.find(x => x.id === id);
+    if (!o) return;
+    o.target = o.target > 0.5 ? 0 : o.base;
+    this.doorOpen.set(id, o.target > 0.5);
+  }
+  pickDoor(clientX, clientY) {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = document.pointerLockElement ? new THREE.Vector2(0, 0)
+      : new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = ray.intersectObjects(this.doorObjs.map(o => o.pivot), true)[0];
+    const id = hit?.object.userData.doorId;
+    if (id) { this.toggleDoor(id); return true; }
+    return false;
+  }
+
   makeArt(it, li, walls) {
     const W = walls[it.wall];
     if (!W) return null;
@@ -509,6 +589,12 @@ export class View3D {
   setEye(cm) { this.eye = cm / 100; }
 
   update(dt) {
+    for (const o of this.doorObjs) {
+      if (Math.abs(o.cur - o.target) < 0.01) continue;
+      const step = 150 * dt;
+      o.cur = Math.abs(o.target - o.cur) <= step ? o.target : o.cur + Math.sign(o.target - o.cur) * step;
+      this.setLeaf(o);
+    }
     if (this.mode !== 'walk') { this.controls.update(); return; }
     const k = this.keys;
     let f = 0, r = 0;
@@ -539,7 +625,14 @@ export class View3D {
 
   bindWalk() {
     const cv = this.renderer.domElement;
-    let last = null;
+    let last = null, tap = null;
+    cv.addEventListener('pointerdown', e => { tap = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+    cv.addEventListener('pointerup', e => {
+      if (!tap) return;
+      const moved = Math.hypot(e.clientX - tap.x, e.clientY - tap.y), quick = performance.now() - tap.t < 400;
+      tap = null;
+      if (moved < 6 && quick) this.pickDoor(e.clientX, e.clientY);
+    });
     cv.addEventListener('pointerdown', e => {
       if (this.mode !== 'walk' || document.pointerLockElement) return;
       last = { id: e.pointerId, x: e.clientX, y: e.clientY };

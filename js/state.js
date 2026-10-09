@@ -126,9 +126,12 @@ export function sanitizeProject(p) {
   const xs = walls.map(w => w.a.x), ys = walls.map(w => w.a.y);
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
   let fixed = 0;
+  const doors = new Map((p.room.doors || []).map(d => [d.id, d]));
   for (const l of p.layouts) for (const it of l.items) {
     const li = lib(it.libId);
     if (!li) continue;
+    // 貼在門上的物件：門被刪了就改回掛在牆上
+    if (it.host && !doors.has(it.host)) { it.host = null; fixed++; }
     if (isWall(li)) {
       if (!ok(it.wall) || !walls[it.wall]) { it.wall = 0; fixed++; }
       if (!ok(it.off)) { it.off = Math.round(walls[it.wall].len / 2); fixed++; }

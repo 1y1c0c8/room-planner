@@ -1,7 +1,7 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
 import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit } from './state.js';
 import { V, segDist, cm, clamp } from './util.js';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs } from './geom.js';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
@@ -50,14 +50,17 @@ export class Elev {
       if (w.wall !== this.wall) return;
       objs.push({ kind: 'win', id: w.id, ref: w, x: X(w.off + w.w / 2), z: w.sill + w.h / 2, w: w.w, h: w.h, locked: false, label: nm(w, `窗 ${j + 1}`), frosted: w.glass === 'frosted' });
     });
+    const doorById = new Map((p.room.doors || []).map(d => [d.id, d]));
     for (const it of lay.items) {
       const li = lib(it.libId);
       if (!li || !isWall(li) || it.wall !== this.wall) continue;
-      objs.push({ kind: 'art', id: it.id, ref: it, li, x: X(it.off), z: it.elev, w: li.w, h: li.h, locked: it.locked, label: li.name });
+      const hd = it.host ? doorById.get(it.host) : null;
+      const t = hd ? hd.off + it.off : it.off;
+      objs.push({ kind: 'art', id: it.id, ref: it, li, x: X(t), z: it.elev, w: li.w, h: li.h, locked: it.locked, label: li.name + (hd && it.face === 'out' ? '（門外側）' : ''), door: hd, outside: hd && it.face === 'out' });
     }
     const doors = (p.room.doors || []).map((d, j) => ({ d, j })).filter(o => o.d.wall === this.wall).map(({ d, j }) => {
-      const a = X(d.off), b = X(d.off + d.w);
-      return { id: d.id, x0: Math.min(a, b), x1: Math.max(a, b), h: Math.min(d.h, H), label: nm(d, `門 ${j + 1}`) };
+      const a = X(d.off), b = X(d.off + d.w), fw = doorFrame(d);
+      return { id: d.id, d, x0: Math.min(a, b), x1: Math.max(a, b), h: Math.min(d.h, H), fw, lh: Math.min(doorLeafH(d), H), label: nm(d, `門 ${j + 1}`) };
     });
     // 靠近這面牆的落地傢俱：投影成側影，頂面可當基準（例如「畫的下緣距櫃子頂面 25 cm」）
     const furn = [];
@@ -105,6 +108,11 @@ export class Elev {
       add({ x: d.x0, y: 0 }, { x: d.x0, y: d.h }, { x: -1, y: 0 }, `${d.label} 門框`, d.id, `d0${d.id}`);
       add({ x: d.x1, y: 0 }, { x: d.x1, y: d.h }, { x: 1, y: 0 }, `${d.label} 門框`, d.id, `d1${d.id}`);
       add({ x: d.x0, y: d.h }, { x: d.x1, y: d.h }, { x: 0, y: 1 }, `${d.label} 上緣`, d.id, `d2${d.id}`);
+      if (d.fw > 0) { // 門片的邊（門框內緣）
+        add({ x: d.x0 + d.fw, y: 0 }, { x: d.x0 + d.fw, y: d.lh }, { x: 1, y: 0 }, `${d.label} 門片邊緣`, d.id, `d3${d.id}`);
+        add({ x: d.x1 - d.fw, y: 0 }, { x: d.x1 - d.fw, y: d.lh }, { x: -1, y: 0 }, `${d.label} 門片邊緣`, d.id, `d4${d.id}`);
+        add({ x: d.x0 + d.fw, y: d.lh }, { x: d.x1 - d.fw, y: d.lh }, { x: 0, y: -1 }, `${d.label} 門片上緣`, d.id, `d5${d.id}`);
+      }
     }
     for (const f of furn) {
       add({ x: f.x0, y: f.h }, { x: f.x1, y: f.h }, { x: 0, y: 1 }, `${f.li.name} 頂面`, f.id, `f0${f.id}`);
@@ -117,7 +125,7 @@ export class Elev {
 
   setPos(D, o, x, z) {
     const t = D.flip ? D.L - x : x;
-    if (o.kind === 'art') { o.ref.off = Math.round(t * 10) / 10; o.ref.elev = Math.round(z * 10) / 10; }
+    if (o.kind === 'art') { o.ref.off = Math.round((t - (o.door ? o.door.off : 0)) * 10) / 10; o.ref.elev = Math.round(z * 10) / 10; }
     else if (o.kind === 'box') {
       o.ref.off = Math.round((t - o.ref.w / 2) * 10) / 10;
       if (!o.ref.toCeil) o.ref.bottom = Math.round((z - o.ref.h / 2) * 10) / 10; // 頂到天花板的量體只能左右移
@@ -206,8 +214,13 @@ export class Elev {
     // 門
     for (const d of D.doors) {
       this.rect(ctx, d.x0, 0, d.x1, d.h);
-      ctx.fillStyle = '#d8d0c4'; ctx.fill();
-      ctx.strokeStyle = '#8b7b6b'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.fillStyle = d.d.frameColor || '#8b7b6b'; ctx.fill();
+      const r = this.rect(ctx, d.x0 + d.fw, 0, d.x1 - d.fw, d.lh);
+      ctx.fillStyle = d.d.leafColor || '#d8d0c4'; ctx.fill();
+      const img = d.d.tex ? getImg(d.d.tex) : null;
+      if (img) ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      this.rect(ctx, d.x0 + d.fw, 0, d.x1 - d.fw, d.lh);
+      ctx.strokeStyle = 'rgba(40,30,20,.5)'; ctx.lineWidth = 1.2; ctx.stroke();
       const c = this.toS({ x: (d.x0 + d.x1) / 2, y: d.h / 2 });
       this.label(ctx, c.x, c.y, d.label, 12, '#6b5f52');
     }
@@ -247,7 +260,9 @@ export class Elev {
           }
         }
         this.rect(ctx, o.x - o.w / 2, o.z - o.h / 2, o.x + o.w / 2, o.z + o.h / 2);
-        ctx.strokeStyle = 'rgba(40,30,20,.55)'; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.strokeStyle = 'rgba(40,30,20,.55)'; ctx.lineWidth = 1.5;
+        if (o.outside) ctx.setLineDash([5, 4]);
+        ctx.stroke(); ctx.setLineDash([]);
       }
       const c = this.toS({ x: o.x, y: o.z - o.h / 2 });
       this.label(ctx, c.x, c.y + 12, (o.locked ? '🔒 ' : '') + o.label, 11);

@@ -202,22 +202,33 @@ export class Plan2D {
     if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D);
     for (const it of items) if (!isRug(lib(it.libId))) this.drawItem(ctx, it, selRug ? 0.4 : 1);
     if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D, true); // 傢俱上再描一次外框，看得出被蓋住的範圍
-    // 門扇與開門範圍畫在物件上面，才看得出會不會撞到
+    // 門框、門片與開門範圍畫在物件上面，才看得出會不會撞到
     for (const d of p.room.doors || []) {
       const g = doorGeom(d, walls);
       if (!g) continue;
-      const tip = V.add(g.hinge, V.scale(g.open, g.w));
-      ctx.beginPath(); ctx.moveTo(g.hinge.x, g.hinge.y); ctx.lineTo(tip.x, tip.y);
-      ctx.lineWidth = 3 / s; ctx.strokeStyle = C.wall; ctx.stroke();
-      const a1 = Math.atan2(g.open.y, g.open.x);
-      const cd = V.sub(g.other, g.hinge);
-      let diff = Math.atan2(cd.y, cd.x) - a1;
+      // 門框：門洞兩側的框（固定不動）
+      ctx.fillStyle = d.frameColor || '#8b7b6b';
+      for (const t0 of [d.off, d.off + d.w - g.fw]) {
+        const q0 = V.add(g.W.a, V.scale(g.u, t0)), q1 = V.add(q0, V.scale(g.u, g.fw));
+        ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y);
+        ctx.lineTo(q1.x - g.n.x * WALL_T, q1.y - g.n.y * WALL_T); ctx.lineTo(q0.x - g.n.x * WALL_T, q0.y - g.n.y * WALL_T); ctx.closePath();
+        ctx.fill();
+      }
+      // 開門範圍（完整 90°）與目前的門片角度
+      const a1 = Math.atan2(g.open.y, g.open.x), a0 = Math.atan2(g.close.y, g.close.x);
+      let diff = a0 - a1;
       while (diff > Math.PI) diff -= 2 * Math.PI;
       while (diff < -Math.PI) diff += 2 * Math.PI;
-      ctx.beginPath(); ctx.moveTo(g.hinge.x, g.hinge.y); ctx.arc(g.hinge.x, g.hinge.y, g.w, a1, a1 + diff, diff < 0); ctx.closePath();
+      ctx.beginPath(); ctx.moveTo(g.hinge.x, g.hinge.y); ctx.arc(g.hinge.x, g.hinge.y, g.leafW, a1, a1 + diff, diff < 0); ctx.closePath();
       ctx.fillStyle = 'rgba(59,54,49,.07)'; ctx.fill();
-      ctx.beginPath(); ctx.arc(g.hinge.x, g.hinge.y, g.w, a1, a1 + diff, diff < 0);
-      ctx.setLineDash([6 / s, 5 / s]); ctx.lineWidth = 1.2 / s; ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(g.hinge.x, g.hinge.y, g.leafW, a1, a1 + diff, diff < 0);
+      ctx.setLineDash([6 / s, 5 / s]); ctx.lineWidth = 1.2 / s; ctx.strokeStyle = C.wall; ctx.stroke(); ctx.setLineDash([]);
+      const th = (g.angle * Math.PI) / 180;
+      const dir = V.add(V.scale(g.close, Math.cos(th)), V.scale(g.open, Math.sin(th)));
+      const tip = V.add(g.hinge, V.scale(dir, g.leafW));
+      ctx.beginPath(); ctx.moveTo(g.hinge.x, g.hinge.y); ctx.lineTo(tip.x, tip.y);
+      ctx.lineWidth = Math.max(3 / s, d.ft || 40); ctx.lineCap = 'butt'; ctx.strokeStyle = d.leafColor || C.wall; ctx.stroke();
+      ctx.lineWidth = 1 / s; ctx.strokeStyle = C.wall; ctx.stroke();
     }
     this.drawWallThings(ctx, D);
     (p.room.beams || []).forEach((bm, j) => {
@@ -322,7 +333,7 @@ export class Plan2D {
     });
     for (const it of D.lay.items) {
       const li = lib(it.libId);
-      if (!li || !isWall(li)) continue;
+      if (!li || !isWall(li) || it.host) continue; // 貼在門上的物件跟著門片，不畫在牆上
       const W = D.walls[it.wall];
       if (!W) continue;
       const th = Math.max(li.d, 7 / s);

@@ -5,7 +5,7 @@ import {
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
 } from './state.js';
 import { uid, cm, toMM, esc, normDeg } from './util.js';
-import { buildRoom, wallEdges, cornerName, isInterior, nm } from './geom.js';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH } from './geom.js';
 import { Plan2D } from './plan2d.js';
 import { rectify } from './rectify.js';
 import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js';
@@ -161,12 +161,14 @@ function renderBoxInspector(box, bx) {
 
 function renderArtInspector(box, it, li) {
   const walls = wallsNow();
+  const doorsHere = P().room.doors.map((d, j) => ({ d, j })).filter(o => o.d.wall === it.wall);
   box.hidden = false;
   box.innerHTML = `
     <div class="ihead"><div><b>${esc(li.name)}</b><div class="mute small">牆面物件・${cm(li.w)} × ${cm(li.h)} cm・厚 ${cm(li.d)}</div></div>
       <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
     <div class="form">
       <label>掛在<select data-k="wall">${walls.map((w, i) => `<option value="${i}" ${it.wall === i ? 'selected' : ''}>${wallName(i, walls.length)}</option>`).join('')}</select></label>
+      ${doorsHere.length ? `<label>貼在<select data-k="host"><option value="">牆面</option>${doorsHere.map(({ d, j }) => ['in', 'out'].map(f => `<option value="${d.id}|${f}" ${it.host === d.id && (it.face || 'in') === f ? 'selected' : ''}>${esc(nm(d, `門 ${j + 1}`))}（${f === 'in' ? '室內側' : '門外側'}）</option>`).join('')).join('')}</select></label>` : ''}
       <label>中心離地（cm）<input data-k="elev" type="number" inputmode="decimal" step="0.1" value="${cm(it.elev)}"></label>
     </div>
     <div class="btns">
@@ -176,9 +178,23 @@ function renderArtInspector(box, it, li) {
     <p class="tip">${it.locked ? '鎖定中：不會被拖動，但仍可當作其他物件的距離基準。' : '點畫的任一條<b>邊</b>，再點天花板、門框、傢俱頂面或其他畫的邊，就能輸入精確距離。'}</p>`;
   box.onchange = e => {
     const k = e.target.dataset.k;
+    if (k === 'host') {
+      // 換宿主時保持畫在牆上的實際位置不變（off 改成相對門的起點，或改回相對牆角）
+      const [id, face] = e.target.value.split('|');
+      const doors = P().room.doors, cur = doors.find(d => d.id === it.host), next = doors.find(d => d.id === id);
+      const t = (cur ? cur.off : 0) + it.off;
+      checkpoint();
+      it.host = next ? next.id : null; it.face = next ? face : undefined;
+      it.off = t - (next ? next.off : 0);
+      changed();
+      toast(next ? `已貼在${nm(next, '門')}的${face === 'in' ? '室內側' : '門外側'}，3D 開門時會一起轉` : '已改回掛在牆上');
+      return;
+    }
     if (k === 'wall') {
       const wi = +e.target.value;
-      checkpoint(); it.wall = wi; it.off = Math.min(Number.isFinite(it.off) ? it.off : walls[wi].len / 2, walls[wi].len - li.w / 2); changed();
+      checkpoint();
+      if (it.host) { const d = P().room.doors.find(x => x.id === it.host); if (d) it.off += d.off; it.host = null; }
+      it.wall = wi; it.off = Math.min(Number.isFinite(it.off) ? it.off : walls[wi].len / 2, walls[wi].len - li.w / 2); changed();
       plan.openWall(wi, it.id);
     }
     if (k === 'elev') { const v = toMM(e.target.value); if (v >= 0) { checkpoint(); it.elev = v; changed(); } }
@@ -548,7 +564,16 @@ function renderRoom() {
             <label>門寬（cm）<input data-k="dd${d.id}" data-dk="w" type="number" inputmode="decimal" step="0.1" value="${cm(d.w)}"></label>
             <label>門高（cm）<input data-k="dh${d.id}" data-dk="h" type="number" inputmode="decimal" step="0.1" value="${cm(d.h)}"></label>
             <label>鉸鏈在<select data-k="dg${d.id}" data-dk="hinge"><option value="start" ${d.hinge !== 'end' ? 'selected' : ''}>靠角 ${cornerName(d.wall)} 那側</option><option value="end" ${d.hinge === 'end' ? 'selected' : ''}>靠角 ${cornerName((d.wall + 1) % n)} 那側</option></select></label>
-            <label>開向<select data-k="ds${d.id}" data-dk="swing"><option value="in" ${d.swing !== 'out' ? 'selected' : ''}>往房內開</option><option value="out" ${d.swing === 'out' ? 'selected' : ''}>往房外開</option></select></label>`)).join('')}
+            <label>開向<select data-k="ds${d.id}" data-dk="swing"><option value="in" ${d.swing !== 'out' ? 'selected' : ''}>往房內開</option><option value="out" ${d.swing === 'out' ? 'selected' : ''}>往房外開</option></select></label>
+            <label>門框寬（cm）<input data-k="df${d.id}" data-dk="fw" type="number" inputmode="decimal" step="0.1" value="${cm(doorFrame(d))}"></label>
+            <label>門片厚（cm）<input data-k="dt${d.id}" data-dk="ft" type="number" inputmode="decimal" step="0.1" value="${cm(d.ft || 40)}"></label>
+            <label>開門角度（°）<input data-k="da${d.id}" data-dk="open" type="number" inputmode="decimal" step="1" min="0" max="180" value="${doorAngle(d)}"></label>
+            <p class="mute small span2">門寬、門高是含門框的總尺寸；門片＝${cm(Math.max(50, d.w - 2 * doorFrame(d)))} × ${cm(doorLeafH(d))} cm。開門時只有門片會轉，3D 裡點門可以開關。</p>
+            <label>門片顏色<input data-k="dc${d.id}" data-dk="leafColor" type="color" value="${esc(d.leafColor || '#d8d0c4')}"></label>
+            <label>門框顏色<input data-k="dr${d.id}" data-dk="frameColor" type="color" value="${esc(d.frameColor || '#8b7b6b')}"></label>
+            <div class="texrow span2">${d.tex && getImg(d.tex) ? `<img src="${getImg(d.tex).src}" class="texprev">` : '<div class="texprev empty">門片貼皮</div>'}
+              <div class="col"><label class="btn">${d.tex ? '換貼皮照片' : '上傳貼皮照片'}<input type="file" accept="image/*" hidden data-doorskin="${d.id}"></label>
+              ${d.tex ? `<button data-doorskindel="${d.id}" class="danger">移除貼皮</button>` : ''}</div></div>`)).join('')}
         <button data-adddoor>＋ 新增門</button>
 
         <div class="lbl">窗戶</div>
@@ -699,7 +724,8 @@ $('#tab-room').addEventListener('change', async e => {
       const d = r.doors.find(x => x.id === id);
       if (dk === 'name') d.name = t.value.trim();
       else if (dk === 'wall') d.wall = +t.value;
-      else if (dk === 'hinge' || dk === 'swing') d[dk] = t.value;
+      else if (dk === 'hinge' || dk === 'swing' || dk === 'leafColor' || dk === 'frameColor') d[dk] = t.value;
+      else if (dk === 'open') { const v = parseFloat(t.value); if (Number.isFinite(v)) d.open = Math.max(0, Math.min(180, v)); }
       else { const v = toMM(t.value); if (v >= 0) d[dk] = v; }
     }, false);
   }
@@ -787,7 +813,21 @@ $('#tab-room').addEventListener('click', async e => {
     return;
   }
   if (b.dataset.delwin) { roomChange(r => { r.windows = r.windows.filter(w => w.id !== b.dataset.delwin); }, false); return; }
-  if (b.dataset.deldoor) { roomChange(r => { r.doors = r.doors.filter(d => d.id !== b.dataset.deldoor); }, false); return; }
+  if (b.dataset.deldoor) {
+    const d = p.room.doors.find(x => x.id === b.dataset.deldoor);
+    roomChange(r => {
+      r.doors = r.doors.filter(x => x.id !== d.id);
+      for (const l of p.layouts) for (const it of l.items) if (it.host === d.id) { it.off += d.off; it.host = null; it.face = undefined; }
+    }, false);
+    if (d?.tex) delImage(d.tex);
+    return;
+  }
+  if (b.dataset.doorskindel) {
+    const d = p.room.doors.find(x => x.id === b.dataset.doorskindel), old = d.tex;
+    roomChange(() => { d.tex = null; }, false);
+    delImage(old);
+    return;
+  }
   if (b.dataset.north != null) { roomChange(r => { r.north = +b.dataset.north; }, false); return; }
   if (b.hasAttribute('data-geo')) {
     if (!navigator.geolocation) { toast('這個瀏覽器不支援定位'); return; }
@@ -802,6 +842,18 @@ $('#tab-room').addEventListener('click', async e => {
   if (b.hasAttribute('data-floordel')) { const old = p.room.floorTex; roomChange(r => { r.floorTex = null; }, false); delImage(old); }
 });
 
+$('#tab-room').addEventListener('change', async e => {
+  const did = e.target.dataset.doorskin;
+  if (!did) return;
+  const file = e.target.files[0], d = P().room.doors.find(x => x.id === did);
+  if (!file || !d) return;
+  const lw = Math.max(50, d.w - 2 * doorFrame(d)), lh = doorLeafH(d);
+  const blob = await rectify(file, { aspect: lw / lh, title: `校正${nm(d, '門')}的門片照片`, orient: '以正面看過去的方向為準，只框門片、不含門框' });
+  if (!blob) return;
+  const id = await putImage(blob), old = d.tex;
+  roomChange(() => { d.tex = id; }, false);
+  if (old) delImage(old);
+});
 $('#tab-room').addEventListener('change', async e => {
   if (!e.target.hasAttribute('data-floorfile')) return;
   const file = e.target.files[0];
@@ -995,6 +1047,7 @@ function openMenu() {
       <li><b>鎖定</b>：鎖住的物件不會被拖動，但可以當距離基準。</li>
       <li><b>牆面（掛畫、窗戶）</b>：在平面圖點一面牆（或牆名標籤），切到牆面視圖。可以拖曳畫和窗戶，也能用「點邊 → 點基準邊」對齊天花板、門框、傢俱頂面或其他畫。</li>
       <li><b>牆面量體與外牆</b>：在「房間」可以新增貼牆凸出的量體（例如冷氣窗台），窗戶可以開在它的正面，玻璃可選透明或霧面。也可以標記哪些牆是室內牆：室內牆上的門窗不會有陽光照進來。</li>
+      <li><b>門</b>：門寬、門高是含門框的總尺寸，另外設定門框寬，開門時只有門片會轉。3D 裡點門就能開關。門片可以設定顏色或上傳貼皮照片；海報、畫的右側面板選「貼在：門」，就會跟著門片一起轉。</li>
       <li><b>房間結構</b>：門、窗、量體、樑都可以自訂名稱，點標題可以折疊或展開。踢腳線打開後，傢俱會貼齊踢腳線表面。</li>
       <li><b>標籤篩選</b>：物品庫上方點標籤就能篩選（選多個＝同時符合），例如「房東的」「自己的」。</li>
       <li><b>指北針</b>：點左下角的指北針可切換「房間擺正」和「正北朝上」，像 Google 地圖一樣。</li>
@@ -1003,7 +1056,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.5・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.6・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1094,8 +1147,8 @@ function syncWalkUI() {
   $('#joy').hidden = !walk || !matchMedia('(pointer: coarse)').matches;
   $('#walkHelp').hidden = !walk;
   $('#walkHelp').textContent = matchMedia('(pointer: coarse)').matches
-    ? '左下搖桿移動・在畫面上滑動轉頭'
-    : 'WASD／方向鍵移動・拖曳轉頭・Shift 快走・R／F 升降視線';
+    ? '左下搖桿移動・在畫面上滑動轉頭・點門可開關'
+    : 'WASD／方向鍵移動・拖曳轉頭・Shift 快走・R／F 升降視線・點門可開關';
   if (walk) { const e = Math.round(v3d.eye * 100); $('#eye').value = e; $('#eyeVal').textContent = e + ' cm'; }
 }
 

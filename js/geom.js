@@ -76,13 +76,21 @@ export function doorGeom(door, walls) {
   const a = V.add(W.a, V.scale(W.u, door.off));
   const b = V.add(W.a, V.scale(W.u, door.off + door.w));
   const end = door.hinge === 'end';
+  const fw = doorFrame(door), leafW = Math.max(50, door.w - 2 * fw);
+  const hingeT = end ? door.off + door.w - fw : door.off + fw; // 門片的轉軸在門框內緣
   return {
-    a, b, W, u: W.u, n: W.n, w: door.w,
-    hinge: end ? b : a,
+    a, b, W, u: W.u, n: W.n, w: door.w, fw, leafW, leafH: doorLeafH(door), hingeT,
+    hinge: V.add(W.a, V.scale(W.u, hingeT)),
     other: end ? a : b,
+    close: end ? V.scale(W.u, -1) : W.u, // 從轉軸指向關門方向
     open: V.scale(W.n, door.swing === 'out' ? -1 : 1),
+    angle: doorAngle(door),
   };
 }
+// 門框寬、門片高、開門角度（舊資料沒有這些欄位時的預設值）
+export const doorFrame = d => (typeof d.fw === 'number' ? d.fw : 40);
+export const doorLeafH = d => Math.max(100, d.h - doorFrame(d));
+export const doorAngle = d => (typeof d.open === 'number' ? d.open : 90);
 
 export const refKey = r => (r.k === 'wall' ? `wall:${r.i}` : r.k === 'door' ? `door:${r.id}:${r.s}` : `${r.k}:${r.id}:${r.e}`);
 
