@@ -433,12 +433,19 @@ export class View3D {
     const ft = d.ft || 40, lw = g.leafW, lh = Math.min(g.leafH, H - 20);
     const edge = new THREE.MeshStandardMaterial({ color: new THREE.Color(d.leafColor || '#d8d0c4'), roughness: 0.6 });
     const img = d.tex ? getImg(d.tex) : null;
-    const face = img ? new THREE.MeshStandardMaterial({ map: this.baseTex(d.tex, img), roughness: 0.6 }) : edge;
+    // 貼皮以房內看到的為準；門外側那一面是水平反轉的
+    const inner = img ? new THREE.MeshStandardMaterial({ map: this.baseTex(d.tex, img), roughness: 0.6 }) : edge;
+    let outer = edge;
+    if (img) {
+      const flip = this.baseTex(d.tex, img).clone();
+      flip.wrapS = THREE.RepeatWrapping; flip.repeat.x = -1; flip.offset.x = 1; flip.needsUpdate = true;
+      outer = new THREE.MeshStandardMaterial({ map: flip, roughness: 0.6 });
+      this.disposables.push(flip, inner, outer);
+    }
     this.disposables.push(edge);
-    if (face !== edge) this.disposables.push(face);
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(lw * M, lh * M, ft * M), [edge, edge, edge, edge, face, face]);
-    // 轉軸座標系：local x＝從轉軸往關門方向；房內那一面是 local z 的 side 方向
+    // 轉軸座標系：local x＝從轉軸往關門方向；房內那一面是 local z 的 side 方向（box 的第 4 面＝+z、第 5 面＝-z）
     const side = Math.sign(V.dot({ x: -g.close.y, y: g.close.x }, g.W.n)) || 1;
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(lw * M, lh * M, ft * M), [edge, edge, edge, edge, side > 0 ? inner : outer, side > 0 ? outer : inner]);
     leaf.position.set((lw / 2) * M, (lh / 2) * M, -side * (ft / 2 + 10) * M);
     leaf.castShadow = true; leaf.receiveShadow = true;
     leaf.userData.doorId = d.id;
