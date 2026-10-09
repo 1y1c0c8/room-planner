@@ -1,9 +1,9 @@
 // 3D 檢視：環繞（看整體）與走動（第一人稱）。只負責「看」，擺放在 2D 做。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom } from './geom.js';
-import { V, pointInPoly, segDist, clamp } from './util.js';
+import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js?v=0.6.2';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom } from './geom.js?v=0.6.2';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.6.2';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）

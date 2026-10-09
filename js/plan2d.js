@@ -1,8 +1,8 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { S, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, emit, getImg } from './state.js';
-import { Elev } from './elev.js';
-import { V, segDist, cm, uid, clamp, normDeg } from './util.js';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs } from './geom.js';
+import { S, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, emit, getImg } from './state.js?v=0.6.2';
+import { Elev } from './elev.js?v=0.6.2';
+import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.6.2';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs } from './geom.js?v=0.6.2';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
