@@ -71,7 +71,7 @@ function warp(src, pts, aspect) {
 const toBlob = cv => new Promise(res => cv.toBlob(res, 'image/jpeg', 0.88));
 
 // aspect = 寬/深（俯視）；回傳 JPEG Blob 或 null（取消）
-export async function rectify(file, { aspect, title }) {
+export async function rectify(file, { aspect, title, orient = '以 2D 俯視圖的方向為準' }) {
   let bmp;
   try { bmp = await createImageBitmap(file); }
   catch { alert('無法讀取這張照片。若是 HEIC 格式，請用 Safari 開啟本網站，或先轉成 JPG。'); return null; }
@@ -86,7 +86,7 @@ export async function rectify(file, { aspect, title }) {
     ov.className = 'rectify';
     ov.innerHTML = `
       <div class="rx-top"><b>${esc(title)}</b>
-        <span>把四個點拖到物體表面的四個角：<i>1 左上</i> → <i>2 右上</i> → <i>3 右下</i> → <i>4 左下</i>（以 2D 俯視圖的方向為準）。方向不對就按「轉 90°」。</span></div>
+        <span>把四個點拖到物體表面的四個角：<i>1 左上</i> → <i>2 右上</i> → <i>3 右下</i> → <i>4 左下</i>（${esc(orient)}）。方向不對就按「轉 90°」。</span></div>
       <div class="rx-stage"><canvas></canvas></div>
       <div class="rx-bar">
         <button data-a="rot">轉 90°</button>

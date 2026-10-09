@@ -1,6 +1,6 @@
 // 介面：側欄（物品庫/房間/擺法）、檢視器、距離輸入、各種對話框
 import {
-  S, on, emit, P, L, lib, isRug, isRound, selItem, checkpoint, changed, undo, redo, histState,
+  S, on, emit, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
 } from './state.js';
@@ -11,7 +11,10 @@ import { rectify } from './rectify.js';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
-const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）' };
+const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）', wall: '牆面物件（畫、海報、鏡子）' };
+const selWindow = () => { const p = P(); return p && S.sel ? (p.room.windows || []).find(w => w.id === S.sel) || null : null; };
+const wallsNow = () => wallEdges(buildRoom(P().room).poly);
+const wallName = (i, n) => `牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）`;
 
 let plan, v3d = null, view = '2d';
 
@@ -26,13 +29,19 @@ function toast(msg) {
 
 function updateHint() {
   const h = $('#hint');
+  const fine = matchMedia('(pointer: coarse)').matches ? '' : '（Shift 微調 0.1 cm）';
   let t = '';
   if (view === '3d') t = '';
+  else if (plan.ev) {
+    if (plan.ev.pick) t = '點一條邊作為基準：天花板、地板、牆角、門框、傢俱頂面或其他畫（點空白處取消）';
+    else if (S.sel) t = `拖曳移動${fine}・點物件的「邊」→ 設定精確距離`;
+    else t = '牆面視圖：點畫或窗戶來調整・從物品庫放入「牆面物件」・Esc 回平面圖';
+  }
   else if (plan.mode === 'measure') t = plan.mpick ? '再點一條「平行」的邊 → 建立量測線' : '點兩條平行的邊建立量測線・點量測數字可刪除';
   else if (plan.pick) t = '點一條邊作為基準：牆、門框、或其他物件的邊（點空白處取消）';
-  else if (selItem()) t = '拖曳移動（Shift 微調 0.1 cm）・拖 ↻ 旋轉・點物件的「邊」→ 設定精確距離';
+  else if (selItem()) t = `拖曳移動${fine}・拖 ↻ 旋轉・點物件的「邊」→ 設定精確距離`;
   else if (!L()?.items.length) t = '從左側「物品庫」新增物品，再放進這個空間';
-  else t = matchMedia('(pointer: coarse)').matches ? '點選物件開始調整・拖曳空白處平移・雙指縮放' : '點選物件開始調整・拖曳空白處平移・滾輪或觸控板縮放';
+  else t = matchMedia('(pointer: coarse)').matches ? '點選物件開始調整・點牆可看牆面（掛畫、窗戶）・雙指縮放' : '點選物件開始調整・點牆可看牆面（掛畫、窗戶）・滾輪或觸控板縮放';
   h.textContent = t;
   h.hidden = !t;
 }
@@ -58,12 +67,79 @@ function rerender(box, fn) {
 }
 
 // ---------- 檢視器（選到的物件） ----------
+function renderWinInspector(box, win) {
+  const p = P(), j = p.room.windows.indexOf(win), walls = wallsNow();
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="ihead"><div><b>窗 ${j + 1}</b><div class="mute small">${wallName(win.wall, walls.length)}・窗戶屬於房間，所有擺法方案共用</div></div>
+      <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
+    <div class="grid3 form">
+      <label>寬（cm）<input data-wk="w" type="number" inputmode="decimal" step="0.1" value="${cm(win.w)}"></label>
+      <label>高（cm）<input data-wk="h" type="number" inputmode="decimal" step="0.1" value="${cm(win.h)}"></label>
+      <label>窗台高（cm）<input data-wk="sill" type="number" inputmode="decimal" step="0.1" value="${cm(win.sill)}"></label>
+    </div>
+    <div class="btns"><button data-a="delwin" class="danger">刪除窗戶</button></div>
+    <p class="tip">點窗戶的<b>邊</b>，再點天花板、地板、牆角或門框，就能輸入精確距離。</p>`;
+  box.onchange = e => {
+    const k = e.target.dataset.wk, v = toMM(e.target.value);
+    if (!k || !(v >= 0)) return;
+    checkpoint(); win[k] = v; changed();
+  };
+  box.onclick = e => {
+    const a = e.target.closest('button')?.dataset.a;
+    if (a === 'close') { S.sel = null; emit('selection'); }
+    if (a === 'delwin') { checkpoint(); p.room.windows = p.room.windows.filter(w => w.id !== win.id); S.sel = null; changed(); emit('selection'); }
+  };
+}
+
+function renderArtInspector(box, it, li) {
+  const walls = wallsNow();
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="ihead"><div><b>${esc(li.name)}</b><div class="mute small">牆面物件・${cm(li.w)} × ${cm(li.h)} cm・厚 ${cm(li.d)}</div></div>
+      <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
+    <div class="form">
+      <label>掛在<select data-k="wall">${walls.map((w, i) => `<option value="${i}" ${it.wall === i ? 'selected' : ''}>${wallName(i, walls.length)}</option>`).join('')}</select></label>
+      <label>中心離地（cm）<input data-k="elev" type="number" inputmode="decimal" step="0.1" value="${cm(it.elev)}"></label>
+    </div>
+    <div class="btns">
+      <button data-a="lock" class="${it.locked ? 'on' : ''}">${it.locked ? '🔒 已鎖定' : '🔓 鎖定'}</button>
+      <button data-a="dup">複製</button><button data-a="edit">編輯物品</button><button data-a="del" class="danger">移出</button>
+    </div>
+    <p class="tip">${it.locked ? '鎖定中：不會被拖動，但仍可當作其他物件的距離基準。' : '點畫的任一條<b>邊</b>，再點天花板、門框、傢俱頂面或其他畫的邊，就能輸入精確距離。'}</p>`;
+  box.onchange = e => {
+    const k = e.target.dataset.k;
+    if (k === 'wall') {
+      const wi = +e.target.value;
+      checkpoint(); it.wall = wi; it.off = Math.min(it.off, walls[wi].len - li.w / 2); changed();
+      plan.openWall(wi, it.id);
+    }
+    if (k === 'elev') { const v = toMM(e.target.value); if (v >= 0) { checkpoint(); it.elev = v; changed(); } }
+  };
+  box.onclick = e => {
+    const a = e.target.closest('button')?.dataset.a;
+    if (!a) return;
+    if (a === 'close') { S.sel = null; emit('selection'); return; }
+    if (a === 'edit') { openLibForm(li); return; }
+    checkpoint();
+    if (a === 'lock') it.locked = !it.locked;
+    if (a === 'dup') { const n = { ...it, id: uid(), off: it.off + li.w + 100, locked: false }; L().items.push(n); S.sel = n.id; }
+    if (a === 'del') { L().items = L().items.filter(x => x.id !== it.id); S.sel = null; }
+    changed(); emit('selection');
+  };
+}
+
 function renderInspector() {
   const box = $('#inspector');
+  box.onchange = null;
+  if (view !== '2d') { box.hidden = true; return; }
+  const win = selWindow();
+  if (win) return renderWinInspector(box, win);
   const it = selItem();
-  if (!it || view !== '2d') { box.hidden = true; return; }
+  if (!it) { box.hidden = true; return; }
   const li = lib(it.libId);
   if (!li) { box.hidden = true; return; }
+  if (isWall(li)) return renderArtInspector(box, it, li);
   box.hidden = false;
   box.innerHTML = `
     <div class="ihead"><div><b>${esc(li.name)}</b><div class="mute small">${SHAPES[li.shape]}・${cm(li.w)} × ${cm(li.d)} × ${cm(li.h)} cm</div></div>
@@ -108,7 +184,7 @@ function renderInspector() {
 }
 
 // ---------- 距離輸入 ----------
-function showDistance({ current, rot, from, to, onApply, onCancel }) {
+function showDistance({ current, rot, from, to, onApply, onCancel, noPin }) {
   const box = $('#distSheet');
   box.hidden = false;
   box.innerHTML = `
@@ -116,7 +192,7 @@ function showDistance({ current, rot, from, to, onApply, onCancel }) {
     <div class="mute small">${esc(from)} 的這條邊 ↔ ${esc(to)}</div>
     ${rot ? `<div class="warnline">兩條邊不平行，套用時會把物件旋轉 ${rot > 0 ? '+' : ''}${rot.toFixed(1)}° 讓它們對齊</div>` : ''}
     <div class="drow"><input id="distIn" type="number" inputmode="decimal" step="0.1" min="0" value="${cm(current)}"><span>cm</span></div>
-    <label class="chk"><input type="checkbox" id="distPin"> 同時釘一條量測線</label>
+    <label class="chk" ${noPin ? 'hidden' : ''}><input type="checkbox" id="distPin"> 同時釘一條量測線</label>
     <label class="chk"><input type="checkbox" id="distFlip"> 放到基準邊的另一側</label>
     <div class="btns end"><button data-a="cancel">取消</button><button data-a="ok" class="primary">套用</button></div>`;
   const inp = box.querySelector('#distIn');
@@ -158,8 +234,8 @@ function renderLib() {
       return `<div class="libCard" data-id="${li.id}">
         ${thumbHTML(li)}
         <div class="lc-main"><b>${esc(li.name)}</b>
-          <div class="mute small">${cm(li.w)} × ${cm(li.d)} × ${cm(li.h)} cm</div>
-          <div class="tags">${isRug(li) ? '<span class="tag">地毯</span>' : ''}${(li.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}${n ? `<span class="tag on">此方案 ×${n}</span>` : ''}</div>
+          <div class="mute small">${isWall(li) ? `${cm(li.w)} × ${cm(li.h)} cm・厚 ${cm(li.d)}` : `${cm(li.w)} × ${cm(li.d)} × ${cm(li.h)} cm`}</div>
+          <div class="tags">${isRug(li) ? '<span class="tag">地毯</span>' : ''}${isWall(li) ? '<span class="tag">牆面</span>' : ''}${(li.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}${n ? `<span class="tag on">此方案 ×${n}</span>` : ''}</div>
         </div>
         <div class="lc-act"><button data-a="place" class="primary">放入</button><button data-a="edit">編輯</button></div>
       </div>`;
@@ -178,6 +254,18 @@ $('#tab-lib').addEventListener('click', e => {
 
 function placeItem(li) {
   const lay = L();
+  if (isWall(li)) {
+    const walls = wallsNow(), wi = plan.ev ? plan.ev.wall : 0, H = P().room.height;
+    checkpoint();
+    const it = { id: uid(), libId: li.id, wall: wi, off: Math.round(walls[wi].len / 2), elev: Math.min(Math.max(li.h / 2 + 50, 1450), H - li.h / 2 - 50), locked: false };
+    lay.items.push(it);
+    changed();
+    if (isMobile()) closeSheet();
+    if (view !== '2d') setView('2d');
+    plan.openWall(wi, it.id);
+    toast(`已掛到牆 ${wi + 1}（右側面板可換牆）`);
+    return;
+  }
   const poly = buildRoom(P().room).poly;
   const xs = poly.map(q => q.x), ys = poly.map(q => q.y);
   let x = Math.round((Math.min(...xs) + Math.max(...xs)) / 20) * 10, y = Math.round((Math.min(...ys) + Math.max(...ys)) / 20) * 10;
@@ -225,13 +313,19 @@ function openLibForm(src) {
 
   const syncDimLabels = () => {
     const shape = q('[data-f="shape"]').value;
+    const wall = shape === 'wall';
     q('[data-lw]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／寬' : '寬';
-    q('[data-ld]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／深' : '深';
-    q('[data-dimhint]').textContent = isRug({ shape }) ? '地毯厚度一般 0.5–2 cm。寬＝俯視時左右、深＝上下，放進空間後可以旋轉。' : '寬＝俯視時左右、深＝前後。尺寸以你量的最大外框為準。';
+    q('[data-ld]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／深' : wall ? '厚度' : '深';
+    q('[data-dimhint]').textContent = wall ? '寬、高＝正面看過去的尺寸（含框）；厚度＝凸出牆面多少（有框的畫填框的厚度，海報約 0.5 cm）。'
+      : isRug({ shape }) ? '地毯厚度一般 0.5–2 cm。寬＝俯視時左右、深＝上下，放進空間後可以旋轉。' : '寬＝俯視時左右、深＝前後。尺寸以你量的最大外框為準。';
+    const fitBtn = el.querySelector('[data-texseg] [data-t="fit"]');
+    if (fitBtn) fitBtn.textContent = wall ? '照片貼正面' : '照片貼頂面';
   };
   q('[data-f="shape"]').onchange = e => {
     syncDimLabels();
     if (isRug({ shape: e.target.value }) && num(q('[data-f="h"]').value) > 50) q('[data-f="h"]').value = '1.0';
+    if (e.target.value === 'wall' && num(q('[data-f="d"]').value) > 150) q('[data-f="d"]').value = '2.0';
+    if (f.texMode !== 'none') renderTex();
   };
   syncDimLabels();
 
@@ -241,7 +335,9 @@ function openLibForm(src) {
     if (f.texMode === 'none') { box.innerHTML = '<p class="mute small">只用底色。之後隨時可以加照片。</p>'; return; }
     const img = newURL || (f.tex ? getImg(f.tex)?.src : null);
     box.innerHTML = `
-      ${f.texMode === 'fit'
+      ${f.texMode === 'fit' && q('[data-f="shape"]').value === 'wall'
+        ? '<p class="mute small">正對著畫或海報拍（含框就把框一起拍進來），站遠一點、用長焦鏡頭最好。接著拖四個角對準外框，貼圖會依你量的寬高拉正。</p>'
+        : f.texMode === 'fit'
         ? '<p class="mute small">拍物品「頂面」（地毯就是正面）。站遠一點、用 iPhone 的長焦鏡頭拍，透視變形最少。接著拖四個角校正，貼圖會依你量的長寬比例拉正。</p>'
         : `<p class="mute small">拍一塊木紋或布料，框出一個區域並告訴我它實際多大，整個物件會用它重複鋪滿。</p>
            <div class="grid2"><label>框選區域寬（cm）<input data-f="tileW" type="number" inputmode="decimal" step="0.1" value="${cm(f.tileW || 300)}"></label>
@@ -252,9 +348,10 @@ function openLibForm(src) {
       const file = e.target.files[0];
       if (!file) return;
       let aspect;
-      if (f.texMode === 'fit') aspect = num(q('[data-f="w"]').value, f.w) / Math.max(1, num(q('[data-f="d"]').value, f.d));
+      const wall = q('[data-f="shape"]').value === 'wall';
+      if (f.texMode === 'fit') aspect = num(q('[data-f="w"]').value, f.w) / Math.max(1, num(q(wall ? '[data-f="h"]' : '[data-f="d"]').value, wall ? f.h : f.d));
       else { f.tileW = num(q('[data-f="tileW"]').value, 300); f.tileH = num(q('[data-f="tileH"]').value, 300); aspect = f.tileW / Math.max(1, f.tileH); }
-      const blob = await rectify(file, { aspect, title: f.texMode === 'fit' ? '校正頂面照片' : '框選材質區域' });
+      const blob = await rectify(file, { aspect, title: f.texMode !== 'fit' ? '框選材質區域' : wall ? '校正正面照片' : '校正頂面照片', orient: wall ? '以正面看過去的方向為準' : '以 2D 俯視圖的方向為準' });
       if (!blob) return;
       newBlob = blob;
       if (newURL) URL.revokeObjectURL(newURL);
@@ -358,6 +455,21 @@ function renderRoom() {
           </div>`).join('')}
         <button data-adddoor>＋ 新增門</button>
 
+        <div class="lbl">窗戶</div>
+        ${(r.windows || []).map((w, j) => `
+          <div class="door" data-win="${w.id}">
+            <div class="dhead"><b>窗 ${j + 1}</b><button class="ghost x danger" data-delwin="${w.id}">刪除</button></div>
+            <div class="grid2">
+              <label>在哪面牆<select data-k="ww${w.id}" data-wk="wall">${walls.map((x, i) => `<option value="${i}" ${w.wall === i ? 'selected' : ''}>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % n)}）</option>`).join('')}</select></label>
+              <label>距角 ${cornerName(w.wall)}（cm）<input data-k="wo${w.id}" data-wk="off" type="number" inputmode="decimal" step="0.1" value="${cm(w.off)}"></label>
+              <label>窗寬（cm）<input data-k="wd${w.id}" data-wk="w" type="number" inputmode="decimal" step="0.1" value="${cm(w.w)}"></label>
+              <label>窗高（cm）<input data-k="wh${w.id}" data-wk="h" type="number" inputmode="decimal" step="0.1" value="${cm(w.h)}"></label>
+              <label>窗台離地（cm）<input data-k="ws${w.id}" data-wk="sill" type="number" inputmode="decimal" step="0.1" value="${cm(w.sill)}"></label>
+            </div>
+          </div>`).join('')}
+        <button data-addwin>＋ 新增窗戶</button>
+        <p class="mute small">也可以在平面圖點一面牆，進入牆面視圖直接拖曳窗戶、用邊設定距離。</p>
+
         <div class="lbl">外觀</div>
         <div class="grid2">
           <label>牆面顏色<input data-k="wallColor" type="color" value="${esc(r.wallColor)}"></label>
@@ -390,6 +502,16 @@ $('#tab-room').addEventListener('change', async e => {
     roomChange(r => { r.walls[+t.dataset.i].turn = +t.value; }); return;
   }
   if (t.classList.contains('wcustom')) { const v = parseFloat(t.value); if (Number.isFinite(v)) roomChange(r => { r.walls[+t.dataset.i].turn = v; }); return; }
+  const wk = t.dataset.wk;
+  if (wk) {
+    const id = t.closest('[data-win]').dataset.win;
+    roomChange(r => {
+      const w = r.windows.find(x => x.id === id);
+      if (wk === 'wall') w.wall = +t.value;
+      else { const v = toMM(t.value); if (v >= 0) w[wk] = v; }
+    }, false);
+    return;
+  }
   const dk = t.dataset.dk;
   if (dk) {
     const id = t.closest('[data-door]').dataset.door;
@@ -414,6 +536,8 @@ $('#tab-room').addEventListener('click', async e => {
         if (r.walls.length !== 4 && !confirm('切回矩形會只保留前兩面牆的長度，門的位置可能需要重設。確定？')) return;
         r.w = r.walls[0].len; r.d = r.walls[1].len;
         r.doors.forEach(d => { d.wall = Math.min(d.wall, 3); });
+        r.windows.forEach(w => { w.wall = Math.min(w.wall, 3); });
+        p.layouts.forEach(l => l.items.forEach(it => { if (it.wall != null) it.wall = Math.min(it.wall, 3); }));
       }
       r.mode = b.dataset.mode;
     });
@@ -426,13 +550,25 @@ $('#tab-room').addEventListener('click', async e => {
     roomChange(r => {
       r.walls.splice(i, 1);
       r.doors = r.doors.filter(d => d.wall !== i).map(d => ({ ...d, wall: d.wall > i ? d.wall - 1 : d.wall }));
+      r.windows = r.windows.filter(w => w.wall !== i).map(w => ({ ...w, wall: w.wall > i ? w.wall - 1 : w.wall }));
+      // 掛在被刪掉那面牆上的畫一併移除，其他的牆號往前補
+      for (const l of p.layouts) {
+        l.items = l.items.filter(it => it.wall !== i);
+        l.items.forEach(it => { if (it.wall != null && it.wall > i) it.wall--; });
+      }
     });
+    plan.closeWall();
     return;
   }
   if (b.hasAttribute('data-adddoor')) {
     roomChange(r => { r.doors.push({ id: uid(), wall: 0, off: 300, w: 800, h: 2100, hinge: 'start', swing: 'in' }); }, false);
     return;
   }
+  if (b.hasAttribute('data-addwin')) {
+    roomChange(r => { r.windows.push({ id: uid(), wall: 0, off: 600, w: 1200, h: 1200, sill: 900 }); }, false);
+    return;
+  }
+  if (b.dataset.delwin) { roomChange(r => { r.windows = r.windows.filter(w => w.id !== b.dataset.delwin); }, false); return; }
   if (b.dataset.deldoor) { roomChange(r => { r.doors = r.doors.filter(d => d.id !== b.dataset.deldoor); }, false); return; }
   if (b.hasAttribute('data-floordel')) { const old = p.room.floorTex; roomChange(r => { r.floorTex = null; }, false); delImage(old); }
 });
@@ -549,11 +685,12 @@ function openMenu() {
       <li><b>擺放</b>：只在 2D 擺。拖曳移動（預設以 1 cm 為單位，按住 Shift 微調 0.1 cm），靠近牆或其他物件的邊會自動貼齊。</li>
       <li><b>精確距離</b>：選取物件 → 點它的一條邊 → 點另一條邊（牆、門框、其他物件）→ 輸入距離。不平行的話會自動轉正。</li>
       <li><b>鎖定</b>：鎖住的物件不會被拖動，但可以當距離基準。</li>
+      <li><b>牆面（掛畫、窗戶）</b>：在平面圖點一面牆（或牆名標籤），切到牆面視圖。可以拖曳畫和窗戶，也能用「點邊 → 點基準邊」對齊天花板、門框、傢俱頂面或其他畫。</li>
       <li><b>量測線</b>：切到「量測線」模式，點兩條平行的邊，就會一直顯示它們之間的距離。</li>
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.1・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.2・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -665,6 +802,17 @@ $('#modeSeg').onclick = e => {
   document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
   plan.setMode(m);
 };
+$('#backPlan').onclick = () => plan.closeWall();
+function onViewChange() {
+  const ev = plan.ev;
+  $('#backPlan').hidden = !ev;
+  $('#elevTitle').hidden = !ev;
+  $('#modeSeg').hidden = !!ev;
+  document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.m === plan.mode));
+  if (ev) { const walls = wallsNow(); $('#elevTitle').textContent = `${wallName(ev.wall, walls.length)} 牆面`; }
+  renderInspector();
+  updateHint();
+}
 $('#zoomIn').onclick = () => plan.zoomAt(plan.w / 2, plan.h / 2, 1.25);
 $('#zoomOut').onclick = () => plan.zoomAt(plan.w / 2, plan.h / 2, 0.8);
 $('#zoomFit').onclick = () => plan.fit();
@@ -683,14 +831,26 @@ window.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (view !== '2d') return;
   if (e.key === 'Escape') {
+    if (plan.ev) {
+      if (plan.ev.pick) plan.cancelPick();
+      else if (S.sel) { S.sel = null; emit('selection'); }
+      else plan.closeWall();
+      return;
+    }
     if (plan.pick) plan.cancelPick();
     else if (plan.mode === 'measure') { plan.mpick = null; $('#modeSeg [data-m="select"]').click(); }
     else if (S.sel) { S.sel = null; emit('selection'); }
     return;
   }
+  const arrows = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+  if (plan.ev) {
+    if (arrows[e.key] && S.sel) { e.preventDefault(); const st = e.shiftKey ? 1 : 10; plan.ev.nudge(arrows[e.key][0] * st, -arrows[e.key][1] * st); }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && S.sel) { e.preventDefault(); $('#inspector [data-a="del"], #inspector [data-a="delwin"]')?.click(); }
+    if ((e.key === 'l' || e.key === 'L')) $('#inspector [data-a="lock"]')?.click();
+    return;
+  }
   const it = selItem();
   if (!it) return;
-  const arrows = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
   if (arrows[e.key]) {
     e.preventDefault();
     if (it.locked) { toast('已鎖定'); return; }
@@ -704,14 +864,16 @@ window.addEventListener('keydown', e => {
 });
 
 // ---------- 事件串接 ----------
-const ui = { toast, updateHint, showDistance, hideDistance, refreshInspector: () => {
+const ui = { toast, updateHint, showDistance, hideDistance, onViewChange, refreshInspector: () => {
   const it = selItem(); const inp = $('#inspector [data-k="rot"]');
   if (it && inp && document.activeElement !== inp) inp.value = +it.rot.toFixed(1);
 } };
 
 on(what => {
-  if (what === 'switch') { plan.needFit = true; plan.fit(); plan.pick = null; plan.mpick = null; hideDistance(); renderTitle(); }
+  if (what === 'switch') { plan.closeWall(); plan.needFit = true; plan.fit(); plan.pick = null; plan.mpick = null; hideDistance(); renderTitle(); }
   if (['project', 'library', 'images', 'switch', 'selection'].includes(what)) plan.draw();
+  if (what === 'project' && plan.ev && !plan.ev.data()) plan.closeWall();
+  if (what === 'project' && plan.ev) $('#elevTitle').textContent = `${wallName(plan.ev.wall, wallsNow().length)} 牆面`;
   if (what === 'project' || what === 'switch') {
     renderRoom();
     renderLay(); renderLib(); renderInspector();

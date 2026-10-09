@@ -1,5 +1,6 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { S, P, L, lib, isRug, isRound, selItem, checkpoint, changed, emit, getImg } from './state.js';
+import { S, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, emit, getImg } from './state.js';
+import { Elev } from './elev.js';
 import { V, segDist, cm, uid, clamp, normDeg } from './util.js';
 import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, isParallel, measureGeom, cornerName, WALL_T } from './geom.js';
 
@@ -22,6 +23,8 @@ export class Plan2D {
     this.drag = null; this.pinch = null; this.pointers = new Map();
     this.hover = null; this.snapHits = []; this.measureHits = [];
     this.active = true; this.needFit = true;
+    this.ev = null;        // 牆面立面圖（開啟時取代平面圖）
+    this.wallHits = [];    // 牆名標籤的點擊範圍
     canvas.addEventListener('pointerdown', e => this.down(e));
     canvas.addEventListener('pointermove', e => this.move(e));
     canvas.addEventListener('pointerup', e => this.up(e, false));
@@ -40,10 +43,12 @@ export class Plan2D {
     this.w = r.width; this.h = r.height;
     this.c.width = Math.round(r.width * this.dpr);
     this.c.height = Math.round(r.height * this.dpr);
-    if (this.needFit) this.fit();
+    if (this.ev?.needFit) { this.ev.fit(); this.ev.needFit = false; }
+    else if (this.needFit) this.fit();
     this.draw();
   }
   fit() {
+    if (this.ev) { this.ev.fit(); this.draw(); return; }
     const p = P();
     if (!p || !this.w) return;
     const poly = buildRoom(p.room).poly;
@@ -60,6 +65,7 @@ export class Plan2D {
     this.draw();
   }
   zoomAt(px, py, k) {
+    if (this.ev) return this.ev.zoomAt(px, py, k);
     const ns = clamp(this.scale * k, MIN_S, MAX_S);
     const wx = (px - this.ox) / this.scale, wy = (py - this.oy) / this.scale;
     this.scale = ns; this.ox = px - wx * ns; this.oy = py - wy * ns;
@@ -68,6 +74,28 @@ export class Plan2D {
   toS(p) { return { x: p.x * this.scale + this.ox, y: p.y * this.scale + this.oy }; }
   toW(x, y) { return { x: (x - this.ox) / this.scale, y: (y - this.oy) / this.scale }; }
   evPos(e) { const r = this.c.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+
+  openWall(i, selId = null) {
+    this.pick = null; this.pickTarget = null; this.mpick = null; this.mode = 'select';
+    this.ui.hideDistance();
+    this.ev = new Elev(this, i);
+    this.ev.fit();
+    S.sel = selId;
+    emit('selection');
+    this.ui.onViewChange();
+    this.draw();
+  }
+  closeWall() {
+    if (!this.ev) return;
+    this.ev = null;
+    this.c.style.cursor = 'default';
+    this.ui.hideDistance();
+    if (S.sel && !selItem()) S.sel = null;
+    else if (selItem() && isWall(lib(selItem().libId))) S.sel = null;
+    emit('selection');
+    this.ui.onViewChange();
+    this.draw();
+  }
 
   setMode(m) {
     this.mode = m; this.pick = null; this.pickTarget = null; this.mpick = null;
@@ -92,6 +120,7 @@ export class Plan2D {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.fillStyle = C.bg;
     ctx.fillRect(0, 0, this.w, this.h);
+    if (this.ev) { this.ev.draw(); return; }
     const D = this.data();
     this.D = D;
     if (!D) return;
@@ -118,7 +147,7 @@ export class Plan2D {
       ctx.lineCap = 'butt'; ctx.lineWidth = WALL_T + 2 / s; ctx.strokeStyle = floor; ctx.stroke();
     }
     // 物件：地毯在下、傢俱在上；選到地毯時傢俱半透明，方便看被壓住的部分
-    const items = lay.items.filter(it => lib(it.libId));
+    const items = lay.items.filter(it => lib(it.libId) && !isWall(lib(it.libId)));
     const sel = selItem();
     const selRug = sel && isRug(lib(sel.libId));
     for (const it of items) if (isRug(lib(it.libId))) this.drawItem(ctx, it, 1);
@@ -140,6 +169,7 @@ export class Plan2D {
       ctx.beginPath(); ctx.arc(g.hinge.x, g.hinge.y, g.w, a1, a1 + diff, diff < 0);
       ctx.setLineDash([6 / s, 5 / s]); ctx.lineWidth = 1.2 / s; ctx.stroke(); ctx.setLineDash([]);
     }
+    this.drawWallThings(ctx, D);
     ctx.restore();
 
     this.drawWallLabels(ctx, D);
@@ -149,6 +179,66 @@ export class Plan2D {
     if (this.pick) this.drawPick(ctx, D);
     if (this.mode === 'measure') this.drawMeasurePick(ctx, D);
     for (const r of this.snapHits) this.seg(ctx, r.a, r.b, C.hot, 3);
+  }
+
+  // 平面圖上的窗戶（牆上的玻璃符號）與牆面物件（貼牆的細條）
+  wallThings(D) {
+    const out = [];
+    const T = WALL_T, s = this.scale;
+    (D.p.room.windows || []).forEach((w, j) => {
+      const W = D.walls[w.wall];
+      if (!W) return;
+      const a = V.add(W.a, V.scale(W.u, w.off)), b = V.add(W.a, V.scale(W.u, w.off + w.w));
+      out.push({ kind: 'win', id: w.id, wall: w.wall, label: `窗 ${j + 1}`, quad: [a, b, V.add(b, V.scale(W.n, -T)), V.add(a, V.scale(W.n, -T))], a, b, W });
+    });
+    for (const it of D.lay.items) {
+      const li = lib(it.libId);
+      if (!li || !isWall(li)) continue;
+      const W = D.walls[it.wall];
+      if (!W) continue;
+      const th = Math.max(li.d, 7 / s);
+      const a = V.add(W.a, V.scale(W.u, it.off - li.w / 2)), b = V.add(W.a, V.scale(W.u, it.off + li.w / 2));
+      out.push({ kind: 'art', id: it.id, wall: it.wall, label: li.name, li, quad: [a, b, V.add(b, V.scale(W.n, th)), V.add(a, V.scale(W.n, th))], a, b, W });
+    }
+    return out;
+  }
+  drawWallThings(ctx, D) {
+    const s = this.scale;
+    for (const t of this.wallThings(D)) {
+      ctx.beginPath(); t.quad.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath();
+      if (t.kind === 'win') {
+        ctx.fillStyle = '#e3eef2'; ctx.fill();
+        ctx.strokeStyle = '#6f858f'; ctx.lineWidth = 1.2 / s; ctx.stroke();
+        for (const f of [0.35, 0.65]) {
+          const p1 = V.add(t.a, V.scale(t.W.n, -WALL_T * f)), p2 = V.add(t.b, V.scale(t.W.n, -WALL_T * f));
+          ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+        }
+      } else {
+        ctx.fillStyle = t.li.color; ctx.fill();
+        ctx.strokeStyle = '#6b5f52'; ctx.lineWidth = 1.2 / s; ctx.stroke();
+      }
+    }
+  }
+  hitWallThing(w, tol) {
+    if (!this.D) return null;
+    for (const t of this.wallThings(this.D).reverse()) {
+      const mid = V.mid(t.quad[0], t.quad[2]);
+      const l = { x: V.dot(V.sub(w, mid), t.W.u), y: V.dot(V.sub(w, mid), t.W.n) };
+      const hw = V.len(V.sub(t.b, t.a)) / 2, hd = Math.abs(V.dot(V.sub(t.quad[2], t.quad[1]), t.W.n)) / 2;
+      if (Math.abs(l.x) <= hw + tol && Math.abs(l.y) <= hd + tol) return t;
+    }
+    return null;
+  }
+  // 點到牆（牆的外側厚度帶）
+  hitWallBand(w, tol) {
+    if (!this.D) return -1;
+    let best = -1, bd = WALL_T + tol;
+    this.D.walls.forEach((W, i) => {
+      const t = V.dot(V.sub(w, W.a), W.u), d = -V.dot(V.sub(w, W.a), W.n);
+      if (t < 0 || t > W.len || d < -tol) return;
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
   }
 
   polyPath(ctx, poly) {
@@ -213,11 +303,12 @@ export class Plan2D {
 
   drawWallLabels(ctx, D) {
     const n = D.walls.length;
+    this.wallHits = [];
     ctx.font = '600 11px -apple-system, "PingFang TC", sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     D.walls.forEach((e, i) => {
       const pos = this.toS(V.sub(e.mid, V.scale(e.n, WALL_T + 16 / this.scale)));
-      this.pill(ctx, pos.x, pos.y, `牆${i + 1}　${cm(e.len)}`, 'rgba(255,253,249,.92)', '#5b524a');
+      this.wallHits[i] = this.pill(ctx, pos.x, pos.y, `牆${i + 1}　${cm(e.len)}`, 'rgba(255,253,249,.92)', '#5b524a');
     });
     D.walls.forEach((e, i) => {
       const prev = D.walls[(i - 1 + n) % n];
@@ -406,7 +497,7 @@ export class Plan2D {
     return isRound(li) ? (l.x / a) ** 2 + (l.y / b) ** 2 <= 1 : Math.abs(l.x) <= a && Math.abs(l.y) <= b;
   }
   hitItem(w, pad) {
-    const items = L().items.filter(it => lib(it.libId));
+    const items = L().items.filter(it => lib(it.libId) && !isWall(lib(it.libId)));
     const furn = items.filter(it => !isRug(lib(it.libId))).reverse();
     const rugs = items.filter(it => isRug(lib(it.libId))).reverse();
     return furn.find(it => this.inside(it, w, pad)) || rugs.find(it => this.inside(it, w, pad)) || null;
@@ -417,6 +508,7 @@ export class Plan2D {
     if (e.button === 2) return;
     const pos = this.evPos(e);
     try { this.c.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    if (this.ev) return this.ev.down(e, pos);
     this.pointers.set(e.pointerId, pos);
     if (this.pointers.size === 2) {
       this.drag = null;
@@ -437,6 +529,10 @@ export class Plan2D {
       const ei = this.hitOwnEdge(sel, w, tol);
       if (ei >= 0) { this.drag = { ...base, type: 'item', item: sel, edge: ei, orig: { x: sel.x, y: sel.y } }; return; }
     }
+    const lh = this.wallHits.findIndex(h => h && Math.abs(pos.x - h.x) < h.w / 2 + 4 && Math.abs(pos.y - h.y) < h.h / 2 + 4);
+    if (lh >= 0) { this.drag = { ...base, type: 'pan', wallTap: lh }; return; }
+    const wt = this.hitWallThing(w, (touch ? 10 : 4) / this.scale);
+    if (wt) { this.drag = { ...base, type: 'pan', wallTap: wt.wall, wallSel: wt.id }; return; }
     const hit = this.hitItem(w, touch ? 6 / this.scale : 0);
     if (hit) {
       if (S.sel !== hit.id) { S.sel = hit.id; emit('selection'); }
@@ -444,11 +540,13 @@ export class Plan2D {
       this.draw();
       return;
     }
-    this.drag = { ...base, type: 'pan' };
+    const wb = this.hitWallBand(w, tol * 0.5);
+    this.drag = { ...base, type: 'pan', wallTap: wb >= 0 ? wb : null };
   }
 
   move(e) {
     const pos = this.evPos(e);
+    if (this.ev) return this.ev.move(e, pos);
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, pos);
     if (this.pinch && this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
@@ -500,6 +598,7 @@ export class Plan2D {
   }
 
   up(e, cancel) {
+    if (this.ev) return this.ev.up(e, cancel);
     this.pointers.delete(e.pointerId);
     if (this.pinch) { if (this.pointers.size < 2) this.pinch = null; this.drag = null; return; }
     const dr = this.drag;
@@ -514,6 +613,7 @@ export class Plan2D {
     }
     switch (dr.type) {
       case 'pan':
+        if (dr.wallTap != null) { this.openWall(dr.wallTap, dr.wallSel || null); return; }
         if (S.sel) { S.sel = null; emit('selection'); }
         break;
       case 'item':
@@ -537,6 +637,7 @@ export class Plan2D {
     const pos = this.evPos(e);
     const mouseWheel = e.deltaMode !== 0 || (e.deltaX === 0 && Math.abs(e.deltaY) >= 100);
     if (e.ctrlKey || mouseWheel) this.zoomAt(pos.x, pos.y, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+    else if (this.ev) { this.ev.ox -= e.deltaX; this.ev.oy -= e.deltaY; this.draw(); }
     else { this.ox -= e.deltaX; this.oy -= e.deltaY; this.draw(); }
   }
 
@@ -552,6 +653,7 @@ export class Plan2D {
       if (sel && !sel.locked && this.hitRot(sel, pos, false)) { h = { type: 'rot' }; cursor = 'grab'; }
       else if (sel && this.hitOwnEdge(sel, w, tol) >= 0) { h = { type: 'edge', i: this.hitOwnEdge(sel, w, tol) }; cursor = 'pointer'; }
       else if (this.hitItem(w, 0)) cursor = 'move';
+      else if (this.wallHits.some(hh => hh && Math.abs(pos.x - hh.x) < hh.w / 2 + 4 && Math.abs(pos.y - hh.y) < hh.h / 2 + 4) || this.hitWallThing(w, 4 / this.scale) || this.hitWallBand(w, 0) >= 0) cursor = 'pointer';
     }
     this.c.style.cursor = cursor;
     if (JSON.stringify(h) !== JSON.stringify(this.hover)) { this.hover = h; this.draw(); }
@@ -588,6 +690,7 @@ export class Plan2D {
     this.ui.updateHint();
   }
   cancelPick() {
+    if (this.ev) return this.ev.cancelPick();
     this.pick = null; this.pickTarget = null;
     this.ui.hideDistance();
     this.ui.updateHint();

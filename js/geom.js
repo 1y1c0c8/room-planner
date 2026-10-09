@@ -103,7 +103,7 @@ export function refEdges(p, lay, libFn, walls) {
   });
   for (const it of lay.items) {
     const li = libFn(it.libId);
-    if (!li) continue;
+    if (!li || li.shape === 'wall') continue;
     for (const e of itemEdges(it, li)) out.push({
       ref: { k: 'item', id: it.id, e: e.i }, kind: 'item', owner: it.id,
       a: e.a, b: e.b, u: e.u, n: e.n, len: e.len, mid: e.mid, label: li.name,

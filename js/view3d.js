@@ -1,7 +1,7 @@
 // 3D 檢視：環繞（看整體）與走動（第一人稱）。只負責「看」，擺放在 2D 做。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { S, P, L, lib, isRug, isRound, getImg } from './state.js';
+import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js';
 import { buildRoom, wallEdges } from './geom.js';
 import { V, pointInPoly, segDist, clamp } from './util.js';
 
@@ -9,11 +9,12 @@ const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
 
 // 平面多邊形 → 網格；map 把 (u,v) 轉成 3D，want 指定法線方向
-function planar(contour, map, want, uvScale = [M, M]) {
+function planar(contour, map, want, uvScale = [M, M], holes = []) {
   const pts = contour.map(([u, v]) => new THREE.Vector2(u, v));
-  const tris = THREE.ShapeUtils.triangulateShape(pts, []);
+  const hs = holes.map(h => h.map(([u, v]) => new THREE.Vector2(u, v)));
+  const tris = THREE.ShapeUtils.triangulateShape(pts, hs);
   const pos = [], uv = [];
-  for (const q of pts) { pos.push(...map(q.x, q.y)); uv.push(q.x * uvScale[0], q.y * uvScale[1]); }
+  for (const q of [...pts, ...hs.flat()]) { pos.push(...map(q.x, q.y)); uv.push(q.x * uvScale[0], q.y * uvScale[1]); }
   const idx = [];
   for (const t of tris) idx.push(t[0], t[1], t[2]);
   if (idx.length >= 3) {
@@ -182,7 +183,9 @@ export class View3D {
     const wallMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(room.wallColor), roughness: 0.92 });
     const capMat = new THREE.MeshStandardMaterial({ color: '#4a443e', roughness: 0.8 });
     const frameMat = new THREE.MeshStandardMaterial({ color: '#8b7b6b', roughness: 0.7 });
-    this.disposables.push(wallMat, capMat, frameMat);
+    const winMat = new THREE.MeshStandardMaterial({ color: '#f3f1ec', roughness: 0.6 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: '#cfe3ec', transparent: true, opacity: 0.22, roughness: 0.1, side: THREE.DoubleSide, depthWrite: false });
+    this.disposables.push(wallMat, capMat, frameMat, winMat, glassMat);
     walls.forEach((w, i) => {
       const doors = (room.doors || []).filter(d => d.wall === i).sort((a, c) => a.off - c.off);
       const c = [[0, 0]];
@@ -192,7 +195,14 @@ export class View3D {
       }
       c.push([w.len, 0], [w.len, H], [0, H]);
       const map = (u, v) => [(w.a.x + w.u.x * u) * M, v * M, (w.a.y + w.u.y * u) * M];
-      const mesh = new THREE.Mesh(planar(dedupe(c), map, new THREE.Vector3(w.n.x, 0, w.n.y)), wallMat);
+      // 窗戶＝牆上的洞（夾在牆內，不碰到牆邊）
+      const wins = (room.windows || []).filter(x => x.wall === i).map(x => {
+        const u0 = clamp(x.off, 5, w.len - 5), u1 = clamp(x.off + x.w, 5, w.len - 5);
+        const v0 = clamp(x.sill, 5, H - 5), v1 = clamp(x.sill + x.h, 5, H - 5);
+        return { u0, u1, v0, v1 };
+      }).filter(x => x.u1 - x.u0 > 10 && x.v1 - x.v0 > 10);
+      const holes = wins.map(x => [[x.u0, x.v0], [x.u1, x.v0], [x.u1, x.v1], [x.u0, x.v1]]);
+      const mesh = new THREE.Mesh(planar(dedupe(c), map, new THREE.Vector3(w.n.x, 0, w.n.y), [M, M], holes), wallMat);
       mesh.receiveShadow = true;
       this.group.add(mesh);
       // 牆頂壓條：讓俯視時看得出牆的輪廓
@@ -201,6 +211,27 @@ export class View3D {
       cap.position.set(mid.x * M, H * M + 0.015, mid.y * M);
       cap.rotation.y = -Math.atan2(w.u.y, w.u.x);
       this.group.add(cap);
+      // 窗框與玻璃
+      for (const x of wins) {
+        const add = (u, len, hgt, v) => {
+          const fr = new THREE.Mesh(new THREE.BoxGeometry(len * M, hgt * M, 0.12), winMat);
+          const pt = V.add(V.add(w.a, V.scale(w.u, u)), V.scale(w.n, -40));
+          fr.position.set(pt.x * M, v * M, pt.y * M);
+          fr.rotation.y = -Math.atan2(w.u.y, w.u.x);
+          this.group.add(fr);
+        };
+        const ww = x.u1 - x.u0, hh = x.v1 - x.v0;
+        add(x.u0 - 15, 30, hh + 60, (x.v0 + x.v1) / 2);
+        add(x.u1 + 15, 30, hh + 60, (x.v0 + x.v1) / 2);
+        add((x.u0 + x.u1) / 2, ww, 30, x.v1 + 15);
+        add((x.u0 + x.u1) / 2, ww + 80, 40, x.v0 - 20);
+        add((x.u0 + x.u1) / 2, 30, hh, (x.v0 + x.v1) / 2); // 中間窗框
+        const glass = new THREE.Mesh(new THREE.PlaneGeometry(ww * M, hh * M), glassMat);
+        const gp = V.add(V.add(w.a, V.scale(w.u, (x.u0 + x.u1) / 2)), V.scale(w.n, -40));
+        glass.position.set(gp.x * M, ((x.v0 + x.v1) / 2) * M, gp.y * M);
+        glass.rotation.y = -Math.atan2(w.u.y, w.u.x);
+        this.group.add(glass);
+      }
       // 門框
       for (const d of doors) {
         const dh = Math.min(d.h, H - 20);
@@ -229,6 +260,7 @@ export class View3D {
     for (const it of lay.items) {
       const li = lib(it.libId);
       if (!li) continue;
+      if (isWall(li)) { const m = this.makeArt(it, li, walls); if (m) this.group.add(m); continue; }
       const rug = isRug(li);
       const mesh = this.makeItem(it, li, rug ? rugN++ : 0);
       this.group.add(mesh);
@@ -273,6 +305,26 @@ export class View3D {
       this.disposables.push(lm);
       mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), lm));
     }
+    return mesh;
+  }
+
+  // 牆面物件：正面朝房內，厚度往房內凸出
+  makeArt(it, li, walls) {
+    const W = walls[it.wall];
+    if (!W) return null;
+    const w = li.w * M, h = li.h * M, d = Math.max(li.d, 2) * M;
+    const mats = [
+      this.mat(li, 'side', li.d, li.h), this.mat(li, 'side', li.d, li.h),
+      this.mat(li, 'side', li.w, li.d), this.mat(li, 'side', li.w, li.d),
+      this.mat(li, 'top', li.w, li.h), this.mat(li, 'bottom', li.w, li.h),
+    ];
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats);
+    const right = { x: W.n.y, y: -W.n.x }; // 站在房內面對牆時的右手方向＝物件的 +x
+    const c = V.add(V.add(W.a, V.scale(W.u, it.off)), V.scale(W.n, (d / M) / 2 + 1));
+    mesh.position.set(c.x * M, it.elev * M, c.y * M);
+    mesh.rotation.y = Math.atan2(-right.y, right.x);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     return mesh;
   }
 

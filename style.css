@@ -67,6 +67,7 @@ header#top {
 .float .seg { background: rgba(235,229,220,.95); }
 .eye { display: inline-flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px 10px; font-size: 13px; }
 .eye input { width: 120px; accent-color: var(--accent); }
+.etitle { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 5px 12px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
 #walkHelp { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); background: rgba(43,40,36,.82); color: #fff; padding: 7px 14px; border-radius: 999px; font-size: 12.5px; pointer-events: none; white-space: nowrap; }
 #joy { position: absolute; left: 24px; bottom: calc(28px + env(safe-area-inset-bottom)); width: 120px; height: 120px; border-radius: 50%; background: rgba(255,255,255,.35); border: 2px solid rgba(255,255,255,.7); touch-action: none; display: grid; place-items: center; z-index: 6; }
 #joy .knob { width: 52px; height: 52px; border-radius: 50%; background: rgba(47,125,118,.85); pointer-events: none; }
@@ -167,6 +168,7 @@ ul.help li { margin-bottom: 4px; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 #mobileNav { display: none; }
+@media (pointer: coarse) { #zoomIn, #zoomOut { display: none; } } /* 觸控用雙指縮放 */
 
 /* 手機 */
 @media (max-width: 760px) {
@@ -186,7 +188,8 @@ ul.help li { margin-bottom: 4px; }
   #mobileNav button.on { background: var(--accent-soft); color: var(--accent); }
   #inspector { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; padding: 10px 12px; }
   #inspector .tip { display: none; }
-  #hint { bottom: auto; top: 58px; font-size: 12px; }
+  #hint { bottom: auto; top: 54px; font-size: 12px; }
+  .etitle { font-size: 13px; }
   .float { left: 8px; top: 8px; right: 8px; }
   #distSheet { bottom: 8px; }
   .proj { max-width: 40vw; }
