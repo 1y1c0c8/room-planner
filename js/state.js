@@ -1,7 +1,7 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.7';
-import { uid } from './util.js?v=0.7';
-import { buildRoom, wallEdges } from './geom.js?v=0.7';
+import { db } from './db.js?v=0.8';
+import { uid } from './util.js?v=0.8';
+import { buildRoom, wallEdges } from './geom.js?v=0.8';
 
 export const S = {
   library: [],

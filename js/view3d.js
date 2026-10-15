@@ -2,10 +2,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg } from './state.js?v=0.7';
-import { createForsa, fullPose } from './forsa.js?v=0.7';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.7';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.7';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg } from './state.js?v=0.8';
+import { createForsa, fullPose } from './forsa.js?v=0.8';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.8';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.8';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -37,6 +38,28 @@ function dedupe(c) {
   return c.filter((q, i) => { const p = c[(i - 1 + c.length) % c.length]; return Math.abs(q[0] - p[0]) > 0.5 || Math.abs(q[1] - p[1]) > 0.5; });
 }
 
+// 反光玻璃：鏡面反射＋透明度（室外越暗越像鏡子）
+const MirrorShader = {
+  ...Reflector.ReflectorShader,
+  uniforms: { ...Reflector.ReflectorShader.uniforms, opacity: { value: 0.2 } },
+  fragmentShader: `
+    uniform vec3 color;
+    uniform float opacity;
+    uniform sampler2D tDiffuse;
+    varying vec4 vUv;
+    #include <logdepthbuf_pars_fragment>
+    void main() {
+      #include <logdepthbuf_fragment>
+      vec4 base = texture2DProj(tDiffuse, vUv);
+      gl_FragColor = vec4(base.rgb * color, opacity);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+};
+const BG_DAY = new THREE.Color('#dde3e4'), BG_NIGHT = new THREE.Color('#05070b');
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
 export class View3D {
   constructor(el, ui) {
     this.el = el; this.ui = ui;
@@ -55,7 +78,9 @@ export class View3D {
     this.scene.environment = new THREE.PMREMGenerator(r).fromScene(new RoomEnvironment(), 0.04).texture;
     this.scene.environmentIntensity = 0.3;
     this.lamps = new Map(); // 物件 id → { lamp, outer }
-    this.scene.background = new THREE.Color('#dde3e4');
+    this.scene.background = BG_DAY.clone();
+    this.night = false;   // 夜間模式：室外全暗，只剩開著的燈
+    this.mirrors = [];    // 反光玻璃（Reflector）
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.03, 200);
     this.camera.rotation.order = 'YXZ';
     this.controls = new OrbitControls(this.camera, r.domElement);
@@ -149,6 +174,8 @@ export class View3D {
   // ---------- 建立場景 ----------
   clear() {
     for (const { lamp } of this.lamps.values()) lamp.dispose();
+    for (const m of this.mirrors) m.dispose();
+    this.mirrors = [];
     this.lamps.clear();
     for (const o of [...this.group.children]) {
       o.traverse(c => { if (c.geometry) c.geometry.dispose(); });
@@ -216,7 +243,7 @@ export class View3D {
       const wins = (room.windows || []).filter(x => x.wall === i).map(x => {
         const u0 = clamp(x.off, 5, w.len - 5), u1 = clamp(x.off + x.w, 5, w.len - 5);
         const v0 = clamp(x.sill, 5, H - 5), v1 = clamp(x.sill + x.h, 5, H - 5);
-        return { u0, u1, v0, v1, dp: winDepth(room, x), frosted: x.glass === 'frosted' };
+        return { u0, u1, v0, v1, dp: winDepth(room, x), frosted: x.glass === 'frosted', mirror: x.glass === 'mirror' };
       }).filter(x => x.u1 - x.u0 > 10 && x.v1 - x.v0 > 10);
       const holes = wins.map(x => [[x.u0, x.v0], [x.u1, x.v0], [x.u1, x.v1], [x.u0, x.v1]]);
       const mesh = new THREE.Mesh(planar(dedupe(c), map, new THREE.Vector3(w.n.x, 0, w.n.y), [M, M], holes), wallMat);
@@ -250,6 +277,18 @@ export class View3D {
         glass.position.set(gp.x * M, ((x.v0 + x.v1) / 2) * M, gp.y * M);
         glass.rotation.y = -Math.atan2(w.u.y, w.u.x);
         this.group.add(glass);
+        if (x.mirror) {
+          // 反光玻璃：貼在玻璃室內側的鏡面，只朝房內
+          const tw = 1024, th = clamp(Math.round((tw * hh) / ww), 128, 2048);
+          const refl = new Reflector(new THREE.PlaneGeometry(ww * M, hh * M), { textureWidth: tw, textureHeight: th, clipBias: 0.003, color: 0xdfe6ea, shader: MirrorShader });
+          refl.material.transparent = true;
+          refl.material.depthWrite = false;
+          const rp = V.add(gp, V.scale(w.n, 3));
+          refl.position.set(rp.x * M, ((x.v0 + x.v1) / 2) * M, rp.y * M);
+          refl.rotation.y = Math.atan2(w.n.x, w.n.y);
+          this.group.add(refl);
+          this.mirrors.push(refl);
+        }
       }
       // 內牆：開口後面是走道或其他房間，放一面暗牆（看起來像走道，日照時也擋光）
       if (isInterior(room, i)) {
@@ -374,13 +413,25 @@ export class View3D {
   }
 
   setSun(s) { this.sunState = s; this.applySun(); }
+  setNight(on) { this.night = !!on; this.applySun(); }
+  // 室外亮度 0（全暗）～1（白天）：夜間模式＝0；日照模式依太陽仰角（傍晚漸暗）
+  outside() {
+    if (this.night) return 0;
+    if (this.sunState) return smooth(-6, 25, this.sunState.alt);
+    return 1;
+  }
 
   // 日照模式：牆與天花板擋光，平行光依太陽方位照進窗戶；一般模式：柔和的頂光
   applySun() {
     const b = this.bounds;
     if (!b) return;
-    const s = this.sunState, sc = this.sun.shadow.camera;
+    const s = this.sunState, sc = this.sun.shadow.camera, o = this.outside();
     for (const m of this.casters) m.castShadow = !!s;
+    this.scene.environmentIntensity = lerp(0.02, 0.3, o);
+    this.scene.background.copy(BG_NIGHT).lerp(BG_DAY, o);
+    // 反光玻璃：室外越暗越像鏡子（白天約兩成反光，看得到外面也映出房間）
+    const mo = lerp(0.9, 0.16, o);
+    for (const m of this.mirrors) m.material.uniforms.opacity.value = mo;
     if (s) {
       const up = s.alt > 0;
       const a = (Math.max(s.alt, 1) * Math.PI) / 180;
@@ -388,16 +439,16 @@ export class View3D {
       this.sun.position.set(b.cx, 0, b.cz).addScaledVector(dir, 20);
       this.sun.intensity = up ? 3.2 : 0;
       this.sun.color.set(s.alt < 12 ? 0xffc98a : 0xfff1dc); // 低角度的陽光偏暖
-      this.hemi.intensity = up ? 0.55 : 0.25;
-      this.amb.intensity = 0.12;
+      this.hemi.intensity = lerp(0.015, 0.55, o);
+      this.amb.intensity = lerp(0.008, 0.12, o);
       const r = Math.max(b.sx, b.sz) / 2 + (this.roomH || 2.6) + 1.5;
       Object.assign(sc, { left: -r, right: r, top: r, bottom: -r, near: 0.5, far: 45 });
     } else {
       this.sun.position.set(b.cx + 2.5, 8, b.cz + 1.5);
-      this.sun.intensity = 1.5;
+      this.sun.intensity = 1.5 * o;
       this.sun.color.set(0xfff3e2);
-      this.hemi.intensity = 1.2;
-      this.amb.intensity = 0.25;
+      this.hemi.intensity = lerp(0.015, 1.2, o);
+      this.amb.intensity = lerp(0.008, 0.25, o);
       const r = Math.max(b.sx, b.sz) / 2 + 1;
       Object.assign(sc, { left: -r, right: r, top: r, bottom: -r, near: 0.1, far: 30 });
     }
@@ -537,7 +588,24 @@ export class View3D {
     lamp.setPose(fullPose(it.pose));
     lamp.setLight(it.light !== false);
     this.group.add(outer);
-    this.lamps.set(it.id, { lamp, outer });
+    // 反彈光：光打在桌面／地板後再散到房間（夜間才看得出燈照亮了周圍）
+    const bounce = new THREE.PointLight(0xffd8a8, 0, 4, 2);
+    this.group.add(bounce);
+    const l = { lamp, outer, bounce, floor: (sup ? sup.h : 0) * M };
+    this.lamps.set(it.id, l);
+    this.placeBounce(l, it);
+  }
+  placeBounce(l, it) {
+    const on = it.light !== false;
+    l.bounce.intensity = on ? 0.12 : 0;
+    if (!on) return;
+    l.outer.updateMatrixWorld(true);
+    const p = l.lamp.spot.getWorldPosition(new THREE.Vector3());
+    const d = l.lamp.spot.target.getWorldPosition(new THREE.Vector3()).sub(p).normalize();
+    // 沿燈罩方向找到落點（桌面或地板），找不到就取 1.2 m 外
+    let t = d.y < -0.05 ? (l.floor - p.y) / d.y : 1.2;
+    t = clamp(t, 0.05, 1.2);
+    l.bounce.position.copy(p).addScaledVector(d, t).add(new THREE.Vector3(0, 0.12, 0));
   }
   // 調姿勢時即時更新，不重建整個場景
   updateModel(it) {
@@ -546,6 +614,7 @@ export class View3D {
     l.lamp.setPose(fullPose(it.pose));
     l.lamp.setLight(it.light !== false);
     l.outer.rotation.y = (-it.rot * Math.PI) / 180;
+    this.placeBounce(l, it);
   }
 
   makeArt(it, li, walls) {

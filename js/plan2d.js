@@ -1,8 +1,8 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { S, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, emit, getImg } from './state.js?v=0.7';
-import { Elev } from './elev.js?v=0.7';
-import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.7';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.7';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, emit, getImg } from './state.js?v=0.8';
+import { Elev } from './elev.js?v=0.8';
+import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.8';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.8';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -16,7 +16,7 @@ let forsa = null, forsaLoading = false;
 function needForsa() {
   if (forsa || forsaLoading) return;
   forsaLoading = true;
-  import('./forsa.js?v=0.7').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
+  import('./forsa.js?v=0.8').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
 }
 
 export class Plan2D {

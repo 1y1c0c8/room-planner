@@ -3,12 +3,12 @@ import {
   S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.7';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.7';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.7';
-import { Plan2D } from './plan2d.js?v=0.7';
-import { rectify } from './rectify.js?v=0.7';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.7';
+} from './state.js?v=0.8';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.8';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.8';
+import { Plan2D } from './plan2d.js?v=0.8';
+import { rectify } from './rectify.js?v=0.8';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.8';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -16,10 +16,11 @@ const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形
 // 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
 const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
 let forsaMod = null;
-const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.7'));
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.8'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
-const glassOpts = w => `<option value="clear" ${w.glass !== 'frosted' ? 'selected' : ''}>透明</option><option value="frosted" ${w.glass === 'frosted' ? 'selected' : ''}>霧面（壓花）</option>`;
+const glassOpts = w => [['clear', '透明'], ['frosted', '霧面（壓花）'], ['mirror', '反光（單向鏡）']]
+  .map(([v, t]) => `<option value="${v}" ${(w.glass || 'clear') === v ? 'selected' : ''}>${t}</option>`).join('');
 const wallOpts = (walls, cur) => walls.map((x, i) => `<option value="${i}" ${cur === i ? 'selected' : ''}>牆 ${i + 1}（${cornerName(i)}→${cornerName((i + 1) % walls.length)}）</option>`).join('');
 // 可折疊卡片：展開狀態記在這台裝置
 const openCards = (() => { try { return new Set(JSON.parse(localStorage.getItem('rp-open') || '[]')); } catch { return new Set(); } })();
@@ -667,7 +668,7 @@ function renderRoom() {
 
         <div class="lbl">窗戶</div>
         ${(r.windows || []).map((w, j) => card('win', w.id, nm(w, `窗 ${j + 1}`),
-          `${w.host ? nm(r.boxes.find(b => b.id === w.host), '量體') + ' 正面' : `牆 ${w.wall + 1}`}・${cm(w.w)}×${cm(w.h)}・窗台 ${cm(w.sill)}${w.glass === 'frosted' ? '・霧面' : ''}`, `
+          `${w.host ? nm(r.boxes.find(b => b.id === w.host), '量體') + ' 正面' : `牆 ${w.wall + 1}`}・${cm(w.w)}×${cm(w.h)}・窗台 ${cm(w.sill)}${w.glass === 'frosted' ? '・霧面' : w.glass === 'mirror' ? '・反光' : ''}`, `
             <label class="span2">名稱<input data-k="wn${w.id}" data-wk="name" value="${esc(w.name || '')}" placeholder="窗 ${j + 1}（例如：冷氣窗）"></label>
             <label>在哪面牆<select data-k="ww${w.id}" data-wk="wall">${wallOpts(walls, w.wall)}</select></label>
             <label>距角 ${cornerName(w.wall)}（cm）<input data-k="wo${w.id}" data-wk="off" type="number" inputmode="decimal" step="0.1" value="${cm(w.off)}"></label>
@@ -1012,8 +1013,20 @@ function toggleSun() {
   }
   sun.on = !sun.on;
   if (!sun.on) stopPlay();
+  if (sun.on && night) setNight(false); // 日照模式自己會依時間變暗，兩者擇一
   applySun();
 }
+
+// ---------- 夜間 ----------
+let night = false;
+function setNight(on) {
+  night = on;
+  document.querySelectorAll('[data-night]').forEach(b => b.classList.toggle('on', night));
+  if (night && sun.on) { sun.on = false; stopPlay(); applySun(); }
+  v3d?.setNight(night);
+  if (night && !L()?.items.some(it => isModel(lib(it.libId)) && it.light !== false)) toast('房間裡沒有開著的燈，所以幾乎全暗');
+}
+document.querySelectorAll('[data-night]').forEach(b => { b.onclick = () => setNight(!night); });
 function stopPlay() { clearInterval(sun.timer); sun.timer = null; $('#sunPlay').textContent = '▶'; }
 document.querySelectorAll('[data-sun]').forEach(b => { b.onclick = toggleSun; });
 $('#sunDay').oninput = e => { sun.doy = +e.target.value; applySun(); };
@@ -1141,12 +1154,13 @@ function openMenu() {
       <li><b>房間結構</b>：門、窗、量體、樑都可以自訂名稱，點標題可以折疊或展開。踢腳線打開後，傢俱會貼齊踢腳線表面。</li>
       <li><b>標籤篩選</b>：物品庫上方點標籤就能篩選（選多個＝同時符合），例如「房東的」「自己的」。</li>
       <li><b>指北針</b>：點左下角的指北針可切換「房間擺正」和「正北朝上」，像 Google 地圖一樣。</li>
-      <li><b>日照</b>：先在「房間」分頁設定座標和北方，再按「☀️ 日照」。拖日期和時間（或按 ▶ 播放一天），2D 會畫出陽光落在地板上的範圍（虛線＝被傢俱擋住的部分），3D 會模擬陽光從窗戶照進來。目前還沒計入周邊建物遮擋。</li>
+      <li><b>日照</b>：先在「房間」分頁設定座標和北方，再按「☀️ 日照」。拖日期和時間（或按 ▶ 播放一天），2D 會畫出陽光落在地板上的範圍（虛線＝被傢俱擋住的部分），3D 會模擬陽光從窗戶照進來。目前還沒計入周邊建物遮擋。日落後 3D 會跟著變暗。</li>
+      <li><b>夜間</b>：3D 右上「🌙 夜間」會把室外變全暗，只剩開著的燈（目前是 FORSÅ 工作燈）。窗戶玻璃選「反光（單向鏡）」時，室外越暗越像鏡子，白天則同時看得到外面和房間的倒影。</li>
       <li><b>量測線</b>：切到「量測線」模式，點兩條平行的邊，就會一直顯示它們之間的距離。</li>
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.7・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.8・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1213,7 +1227,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.7');
+        const { View3D } = await import('./view3d.js?v=0.8');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), {
           onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
@@ -1221,6 +1235,7 @@ async function setView(v) {
         });
         v3d.bindJoystick($('#joy'));
         if (sun.on) applySun();
+        if (night) v3d.setNight(true);
       } catch (err) {
         $('#v3d').innerHTML = `<div class="loading">3D 載入失敗（需要網路）：${esc(err.message)}</div>`;
         return;
@@ -1352,7 +1367,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.7';
+const APP_VERSION = '0.8';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;

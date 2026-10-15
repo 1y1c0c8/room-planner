@@ -209,7 +209,7 @@ export function createForsa({ palette = 'mine', withLight = true } = {}) {
   function dispose() { for (const o of own) o.dispose?.(); if (cable) cable.geometry.dispose(); }
 
   setPose(DEFAULT_POSE);
-  return { root, setPose, setLight, collides, planPoints, dispose, pickables: root };
+  return { root, spot, setPose, setLight, collides, planPoints, dispose, pickables: root };
 }
 
 // 共用的探針燈：用來算碰撞極限與平面圖投影，不畫出來

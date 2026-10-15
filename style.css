@@ -69,6 +69,7 @@ header#top {
 .eye input { width: 120px; accent-color: var(--accent); }
 .etitle { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 5px 12px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
 .sunbtn.on { background: #fff3d1; border-color: #f0cf7a; color: #8a5a00; }
+.nightbtn.on { background: #1f2636; border-color: #3a4560; color: #e6ebff; }
 #sunBar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(520px, calc(100% - 24px)); z-index: 7; padding: 10px 14px; }
 .sunrow { display: flex; align-items: center; gap: 10px; }
 .sunrow input[type=range] { flex: 1; accent-color: #e0a21c; padding: 0; border: 0; background: transparent; }
