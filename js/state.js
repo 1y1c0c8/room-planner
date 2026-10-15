@@ -1,7 +1,7 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.8.1';
-import { uid } from './util.js?v=0.8.1';
-import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.8.1';
+import { db } from './db.js?v=0.9';
+import { uid } from './util.js?v=0.9';
+import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.9';
 
 export const S = {
   library: [],
@@ -22,6 +22,14 @@ export const isRug = li => !!li && (li.shape === 'rug' || li.shape === 'rugRound
 export const isModel = li => !!li && li.shape === 'model'; // 特製模型（目前有 FORSÅ 工作燈）
 export const isRound = li => !!li && (li.shape === 'cyl' || li.shape === 'rugRound' || li.shape === 'model');
 export const isWall = li => !!li && li.shape === 'wall'; // 牆面物件：畫、海報、鏡子
+// 圓角（mm）：R＝俯視圓角、r＝邊緣圓角（only 方塊傢俱；矩形地毯只有 R），超過尺寸就夾到最大
+export const radii = li => {
+  if (!li || !(li.shape === 'box' || li.shape === 'rug')) return { R: 0, r: 0, both: false };
+  const both = !!li.reBoth, Rm = Math.min(li.w, li.d) / 2;
+  const R = Math.min(Math.max(+li.rr || 0, 0), Rm);
+  const r = li.shape === 'rug' ? 0 : Math.min(Math.max(+li.re || 0, 0), Rm, both ? li.h / 2 : li.h);
+  return { R, r, both };
+};
 export const selItem = () => { const l = L(); return l && S.sel ? l.items.find(i => i.id === S.sel) || null : null; };
 
 export function defaultRoom() {

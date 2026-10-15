@@ -1,7 +1,7 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
-import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit } from './state.js?v=0.8.1';
-import { V, segDist, cm, clamp } from './util.js?v=0.8.1';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.8.1';
+import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.9';
+import { V, segDist, cm, clamp } from './util.js?v=0.9';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.9';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
@@ -227,7 +227,9 @@ export class Elev {
     // 傢俱側影（離牆越遠越淡）
     for (const f of D.furn) {
       ctx.globalAlpha = 0.75 - (f.dist / NEAR) * 0.4;
-      this.rect(ctx, f.x0, 0, f.x1, f.h);
+      const rd = radii(f.li), er = Math.min(rd.r, (f.x1 - f.x0) / 2) * s; // 側面只看得到邊緣圓角
+      const fr = this.rect(ctx, f.x0, 0, f.x1, f.h);
+      if (er > 0) { ctx.beginPath(); ctx.roundRect(fr.x, fr.y, fr.w, fr.h, [er, er, rd.both ? er : 0, rd.both ? er : 0]); }
       ctx.fillStyle = f.li.color; ctx.fill();
       ctx.globalAlpha = 1;
       ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(60,50,40,.6)'; ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);

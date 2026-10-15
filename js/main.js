@@ -3,12 +3,12 @@ import {
   S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.8.1';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.8.1';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.8.1';
-import { Plan2D } from './plan2d.js?v=0.8.1';
-import { rectify } from './rectify.js?v=0.8.1';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.8.1';
+} from './state.js?v=0.9';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.9';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.9';
+import { Plan2D } from './plan2d.js?v=0.9';
+import { rectify } from './rectify.js?v=0.9';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.9';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -16,7 +16,7 @@ const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形
 // 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
 const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
 let forsaMod = null;
-const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.8.1'));
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.9'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => [['clear', '透明'], ['frosted', '霧面（壓花）'], ['mirror', '反光（單向鏡）']]
@@ -467,6 +467,12 @@ function openLibForm(src) {
         <label>高（cm）<input data-f="h" type="number" inputmode="decimal" step="0.1" value="${cm(f.h)}"></label>
       </div>
       <p class="mute small" data-dimhint></p>
+      <div class="grid3" data-roundbox>
+        <label>俯視圓角 R（cm）<input data-f="rr" type="number" inputmode="decimal" step="0.1" min="0" value="${cm(f.rr || 0)}"></label>
+        <label data-rebox>邊緣圓角 r（cm）<input data-f="re" type="number" inputmode="decimal" step="0.1" min="0" value="${cm(f.re || 0)}"></label>
+        <label data-rebox>邊緣<select data-f="reBoth"><option value="">只有上緣</option><option value="1" ${f.reBoth ? 'selected' : ''}>上下緣都圓</option></select></label>
+      </div>
+      <p class="mute small" data-roundhint>R＝從上面看的四個角（2D 看得到）；r＝桌緣、床墊那種頂面一圈的圓邊（側面看得到）。兩個一樣大就是圓潤的箱子。填 0＝直角。</p>
       <label>底色<input data-f="color" type="color" value="${esc(f.color)}"></label>
       <div class="lbl">外觀</div>
       <div class="seg" data-texseg>
@@ -492,6 +498,8 @@ function openLibForm(src) {
     q('[data-normal]').hidden = shape === 'model';
     if (shape === 'model' && !q('[data-f="name"]').value.trim()) q('[data-f="name"]').value = 'FORSÅ 工作燈';
     const wall = shape === 'wall';
+    q('[data-roundbox]').hidden = q('[data-roundhint]').hidden = !(shape === 'box' || shape === 'rug');
+    el.querySelectorAll('[data-rebox]').forEach(x => { x.hidden = shape !== 'box'; });
     q('[data-lw]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／寬' : '寬';
     q('[data-ld]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／深' : wall ? '厚度' : '深';
     q('[data-dimhint]').textContent = wall ? '寬、高＝正面看過去的尺寸（含框）；厚度＝凸出牆面多少（有框的畫填框的厚度，海報約 0.5 cm）。'
@@ -563,6 +571,7 @@ function openLibForm(src) {
     }
     if (!(f.w > 0 && f.d > 0 && f.h > 0)) { toast('寬、深、高都要大於 0'); return; }
     if (f.shape !== 'model') f.color = q('[data-f="color"]').value;
+    f.rr = Math.max(0, num(q('[data-f="rr"]').value, 0)); f.re = Math.max(0, num(q('[data-f="re"]').value, 0)); f.reBoth = !!q('[data-f="reBoth"]').value;
     f.tags = q('[data-f="tags"]').value.split(/[,，、]/).map(s => s.trim()).filter(Boolean);
     f.notes = q('[data-f="notes"]').value;
     if (f.texMode === 'tile') { f.tileW = num(q('[data-f="tileW"]').value, f.tileW); f.tileH = num(q('[data-f="tileH"]').value, f.tileH); }
@@ -1160,7 +1169,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.8.1・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.9・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1227,7 +1236,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.8.1');
+        const { View3D } = await import('./view3d.js?v=0.9');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), {
           onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
@@ -1367,7 +1376,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.8.1';
+const APP_VERSION = '0.9';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;

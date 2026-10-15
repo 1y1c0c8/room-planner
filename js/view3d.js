@@ -3,10 +3,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg } from './state.js?v=0.8.1';
-import { createForsa, fullPose } from './forsa.js?v=0.8.1';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.8.1';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.8.1';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg, radii } from './state.js?v=0.9';
+import { roundedBoxGeometry } from './rounded.js?v=0.9';
+import { createForsa, fullPose } from './forsa.js?v=0.9';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.9';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.9';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -464,7 +465,8 @@ export class View3D {
       geo = new THREE.CylinderGeometry(0.5, 0.5, 1, 56);
       mats = [this.mat(li, 'side', (Math.PI * (li.w + li.d)) / 2, li.h), this.mat(li, 'top', li.w, li.d), this.mat(li, 'bottom', li.w, li.d)];
     } else {
-      geo = new THREE.BoxGeometry(w, h, d);
+      const rd = radii(li);
+      geo = rd.R > 0 || rd.r > 0 ? roundedBoxGeometry(w, h, d, rd.R * M, rd.r * M, rd.both) : new THREE.BoxGeometry(w, h, d);
       mats = [
         this.mat(li, 'side', li.d, li.h), this.mat(li, 'side', li.d, li.h),
         this.mat(li, 'top', li.w, li.d), this.mat(li, 'bottom', li.w, li.d),
