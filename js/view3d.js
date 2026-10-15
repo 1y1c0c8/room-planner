@@ -3,10 +3,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg } from './state.js?v=0.8';
-import { createForsa, fullPose } from './forsa.js?v=0.8';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.8';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.8';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg } from './state.js?v=0.8.1';
+import { createForsa, fullPose } from './forsa.js?v=0.8.1';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.8.1';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.8.1';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）

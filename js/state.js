@@ -1,7 +1,7 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.8';
-import { uid } from './util.js?v=0.8';
-import { buildRoom, wallEdges } from './geom.js?v=0.8';
+import { db } from './db.js?v=0.8.1';
+import { uid } from './util.js?v=0.8.1';
+import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.8.1';
 
 export const S = {
   library: [],
@@ -72,6 +72,7 @@ export function checkpoint() {
 export function changed(kind = 'project') {
   const p = P();
   if (!p) return;
+  autoHostDoors(p);
   p.updated = Date.now();
   scheduleSave(p);
   emit(kind);
@@ -122,6 +123,27 @@ export function pruneMeasures(lay) {
 // ---------- 物品庫 ----------
 // 物件位置自我修復：物品庫改了類型（地板物件 ⇄ 牆面物件）時，已放進空間的那些份要跟著轉換
 const ok = v => typeof v === 'number' && Number.isFinite(v);
+// 牆面物件的中心落在門片上 → 自動貼到門片（開門時跟著轉）；移出門片 → 改回掛在牆上
+// （門洞裡沒有牆，所以不會有「掛在門洞牆面」這種情況）
+export function autoHostDoors(p) {
+  const doors = p.room.doors || [];
+  let n = 0;
+  for (const l of p.layouts) for (const it of l.items) {
+    const li = lib(it.libId);
+    if (!li || !isWall(li) || !ok(it.off) || !ok(it.elev)) continue;
+    const cur = it.host ? doors.find(d => d.id === it.host) : null;
+    const t = (cur ? cur.off : 0) + it.off;
+    const on = d => d.wall === it.wall && t > d.off + doorFrame(d) && t < d.off + d.w - doorFrame(d) && it.elev < doorLeafH(d);
+    const next = cur && on(cur) ? cur : doors.find(on) || null;
+    if (next === cur) continue;
+    it.host = next ? next.id : null;
+    it.face = next ? (cur ? it.face : 'in') : undefined;
+    it.off = t - (next ? next.off : 0);
+    n++;
+  }
+  return n;
+}
+
 export function sanitizeProject(p) {
   const walls = wallEdges(buildRoom(p.room).poly), H = p.room.height;
   const xs = walls.map(w => w.a.x), ys = walls.map(w => w.a.y);
@@ -142,6 +164,7 @@ export function sanitizeProject(p) {
       if (!ok(it.rot)) { it.rot = 0; fixed++; }
     }
   }
+  fixed += autoHostDoors(p);
   return fixed;
 }
 
