@@ -1,7 +1,7 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.6.3';
-import { uid } from './util.js?v=0.6.3';
-import { buildRoom, wallEdges } from './geom.js?v=0.6.3';
+import { db } from './db.js?v=0.7';
+import { uid } from './util.js?v=0.7';
+import { buildRoom, wallEdges } from './geom.js?v=0.7';
 
 export const S = {
   library: [],
@@ -19,7 +19,8 @@ export const P = () => S.projects.find(p => p.id === S.projectId) || null;
 export const L = (p = P()) => (p ? p.layouts.find(l => l.id === p.activeLayout) || p.layouts[0] : null);
 export const lib = id => S.library.find(x => x.id === id);
 export const isRug = li => !!li && (li.shape === 'rug' || li.shape === 'rugRound');
-export const isRound = li => !!li && (li.shape === 'cyl' || li.shape === 'rugRound');
+export const isModel = li => !!li && li.shape === 'model'; // 特製模型（目前有 FORSÅ 工作燈）
+export const isRound = li => !!li && (li.shape === 'cyl' || li.shape === 'rugRound' || li.shape === 'model');
 export const isWall = li => !!li && li.shape === 'wall'; // 牆面物件：畫、海報、鏡子
 export const selItem = () => { const l = L(); return l && S.sel ? l.items.find(i => i.id === S.sel) || null : null; };
 

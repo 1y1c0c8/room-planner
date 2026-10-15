@@ -1,8 +1,8 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { S, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, emit, getImg } from './state.js?v=0.6.3';
-import { Elev } from './elev.js?v=0.6.3';
-import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.6.3';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs } from './geom.js?v=0.6.3';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, emit, getImg } from './state.js?v=0.7';
+import { Elev } from './elev.js?v=0.7';
+import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.7';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.7';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -11,6 +11,13 @@ const C = {
 };
 const MIN_S = 0.02, MAX_S = 3;
 const ROT_GAP = 30; // 旋轉把手與物件的距離（px）
+// 特製模型的程式要用到 3D 函式庫，有需要時才載入（載入完重畫）
+let forsa = null, forsaLoading = false;
+function needForsa() {
+  if (forsa || forsaLoading) return;
+  forsaLoading = true;
+  import('./forsa.js?v=0.7').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
+}
 
 export class Plan2D {
   constructor(canvas, ui) {
@@ -200,7 +207,8 @@ export class Plan2D {
     const selRug = sel && isRug(lib(sel.libId));
     for (const it of items) if (isRug(lib(it.libId))) this.drawItem(ctx, it, 1);
     if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D);
-    for (const it of items) if (!isRug(lib(it.libId))) this.drawItem(ctx, it, selRug ? 0.4 : 1);
+    for (const it of items) if (!isRug(lib(it.libId)) && !isModel(lib(it.libId))) this.drawItem(ctx, it, selRug ? 0.4 : 1);
+    for (const it of items) if (isModel(lib(it.libId))) this.drawItem(ctx, it, 1); // 檯燈畫在傢俱上面
     if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D, true); // 傢俱上再描一次外框，看得出被蓋住的範圍
     // 門框、門片與開門範圍畫在物件上面，才看得出會不會撞到
     for (const d of p.room.doors || []) {
@@ -418,8 +426,29 @@ export class Plan2D {
     ctx.restore();
   }
 
+  // 檯燈：底座實心圓＋手臂與燈罩的投影（虛線）
+  drawModel(ctx, it, li, alpha) {
+    const s = this.scale;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.beginPath(); ctx.arc(it.x, it.y, li.w / 2, 0, Math.PI * 2);
+    ctx.fillStyle = li.color || '#111'; ctx.fill();
+    ctx.lineWidth = 1.4 / s; ctx.strokeStyle = '#6b5f52'; ctx.stroke();
+    if (!forsa) { needForsa(); ctx.restore(); return; }
+    const g = forsa.planGeom(it.pose), r = (it.rot * Math.PI) / 180;
+    const P = v => V.add(it, V.rot({ x: v.x * 10, y: v.z * 10 }, r)); // 燈的公分座標 → 平面圖毫米
+    const pts = [g.post, g.elbow, g.head, g.shade].map(P);
+    ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+    ctx.setLineDash([5 / s, 4 / s]); ctx.lineWidth = 2 / s; ctx.strokeStyle = 'rgba(40,35,30,.75)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(pts[3].x, pts[3].y, 60, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(40,35,30,.12)'; ctx.fill(); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   drawItem(ctx, it, alpha) {
     const li = lib(it.libId);
+    if (isModel(li)) return this.drawModel(ctx, it, li, alpha);
     const w = li.w, d = li.d, rug = isRug(li);
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -475,7 +504,8 @@ export class Plan2D {
       const li = lib(it.libId);
       const c = this.toS(it);
       const minPx = Math.min(li.w, li.d) * this.scale;
-      const name = (it.locked ? '🔒 ' : '') + li.name;
+      const sup = isModel(li) ? supportOf(L(), it, lib) : null;
+      const name = (it.locked ? '🔒 ' : '') + li.name + (sup ? `（在${sup.name}上）` : '');
       ctx.font = '600 12px -apple-system, "PingFang TC", sans-serif';
       ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.fillStyle = C.ink;
       const showDim = minPx > 46;
@@ -647,7 +677,7 @@ export class Plan2D {
   }
   hitItem(w, pad) {
     const items = L().items.filter(it => lib(it.libId) && !isWall(lib(it.libId)));
-    const furn = items.filter(it => !isRug(lib(it.libId))).reverse();
+    const furn = items.filter(it => !isRug(lib(it.libId))).reverse().sort((a, b) => isModel(lib(b.libId)) - isModel(lib(a.libId))); // 檯燈優先被點到
     const rugs = items.filter(it => isRug(lib(it.libId))).reverse();
     return furn.find(it => this.inside(it, w, pad)) || rugs.find(it => this.inside(it, w, pad)) || null;
   }

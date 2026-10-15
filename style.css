@@ -86,6 +86,11 @@ header#top {
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); padding: 12px 14px; }
 #inspector { position: absolute; right: 12px; top: 12px; width: 280px; z-index: 6; }
+#inspector.wide { width: 320px; max-height: calc(100% - 24px); overflow: auto; }
+.msliders { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+.msliders .slider { display: flex; flex-direction: column; gap: 0; font-size: 12.5px; }
+.msliders .slider .top { display: flex; justify-content: space-between; color: var(--mute); }
+.msliders input[type=range] { padding: 0; border: 0; background: transparent; accent-color: var(--accent); }
 .ihead { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
 .ihead b { font-size: 15px; }
 .row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
@@ -213,6 +218,7 @@ ul.help li { margin-bottom: 4px; }
   #mobileNav button { flex: 1; background: var(--chip); }
   #mobileNav button.on { background: var(--accent-soft); color: var(--accent); }
   #inspector { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; padding: 10px 12px; }
+  #inspector.wide { width: auto; max-height: 52dvh; }
   #inspector .tip { display: none; }
   #hint { bottom: auto; top: 54px; font-size: 12px; }
   .etitle { font-size: 13px; }

@@ -1,18 +1,22 @@
 // 介面：側欄（物品庫/房間/擺法）、檢視器、距離輸入、各種對話框
 import {
-  S, on, emit, P, L, lib, isRug, isRound, isWall, selItem, checkpoint, changed, undo, redo, histState,
+  S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.6.3';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.6.3';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH } from './geom.js?v=0.6.3';
-import { Plan2D } from './plan2d.js?v=0.6.3';
-import { rectify } from './rectify.js?v=0.6.3';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.6.3';
+} from './state.js?v=0.7';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.7';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.7';
+import { Plan2D } from './plan2d.js?v=0.7';
+import { rectify } from './rectify.js?v=0.7';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.7';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
-const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）', wall: '牆面物件（畫、海報、鏡子）' };
+const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）', wall: '牆面物件（畫、海報、鏡子）', model: '特製模型（FORSÅ 工作燈）' };
+// 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
+const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
+let forsaMod = null;
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.7'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => `<option value="clear" ${w.glass !== 'frosted' ? 'selected' : ''}>透明</option><option value="frosted" ${w.glass === 'frosted' ? 'selected' : ''}>霧面（壓花）</option>`;
@@ -159,6 +163,68 @@ function renderBoxInspector(box, bx) {
   };
 }
 
+// 檯燈：整盞旋轉、七個關節、開關燈；拖滑桿時即時更新 2D／3D，放開才存檔
+function renderModelInspector(box, it, li) {
+  const sup = supportOf(L(), it, lib);
+  const pose = { ...(it.pose || {}) };
+  box.hidden = false;
+  box.classList.add('wide');
+  box.innerHTML = `
+    <div class="ihead"><div><b>${esc(li.name)}</b><div class="mute small">特製模型・${esc(MODEL_PALETTES[li.palette || 'mine'][0])}・${sup ? `放在「${esc(sup.name)}」上（高 ${cm(sup.h)} cm）` : '放在地板上'}</div></div>
+      <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
+    <div class="msliders">
+      <label class="slider"><span class="top"><span>整盞燈旋轉（連底座）</span><span data-v="rot">${Math.round(it.rot)}°</span></span><input type="range" data-j="rot" min="0" max="359" step="1" value="${Math.round(it.rot)}"></label>
+      ${'<span class="jload mute small">載入關節…</span>'}
+    </div>
+    <div class="btns">
+      <button data-a="light" class="${it.light !== false ? 'on' : ''}">${it.light !== false ? '💡 燈開著' : '燈關著'}</button>
+      <button data-a="resetpose">回到預設姿勢</button>
+      <button data-a="lock" class="${it.locked ? 'on' : ''}">${it.locked ? '🔒 已鎖定' : '🔓 鎖定'}</button>
+      <button data-a="edit">編輯物品</button><button data-a="del" class="danger">移出</button>
+    </div>
+    <p class="tip">拖到桌子或櫃子上，燈會自動坐到頂面。關節轉到會撞到燈臂或桌面時會停住。在 3D 裡點燈也能選取。</p>`;
+  const wrap = box.querySelector('.msliders');
+  loadForsa().then(F => {
+    if (!wrap.isConnected) return; // 期間又重繪過，交給新的那次
+    wrap.querySelector('.jload')?.remove();
+    const full = F.fullPose(it.pose);
+    wrap.insertAdjacentHTML('beforeend', F.JOINTS.map(([k, label, mn, mx]) =>
+      `<label class="slider"><span class="top"><span>${label}</span><span data-v="${k}">${full[k]}°</span></span><input type="range" data-j="${k}" min="${mn}" max="${mx}" step="1" value="${full[k]}"></label>`).join(''));
+  });
+  let dragging = false;
+  const live = () => { plan.draw(); v3d?.updateModel(it); };
+  box.oninput = async e => {
+    const k = e.target.dataset.j;
+    if (!k) return;
+    if (it.locked) { toast('已鎖定，先解鎖才能調整'); e.target.value = k === 'rot' ? it.rot : F_full()[k]; return; }
+    if (!dragging) { checkpoint(); dragging = true; }
+    const target = +e.target.value;
+    if (k === 'rot') { it.rot = target; }
+    else {
+      const F = await loadForsa();
+      const ok = F.clampJoint(it.pose, k, target);
+      it.pose = { ...(it.pose || {}), [k]: ok };
+      if (ok !== target) { e.target.value = ok; toast('到極限了：再轉會撞到燈臂或桌面'); }
+    }
+    const v = box.querySelector(`[data-v="${k}"]`); if (v) v.textContent = `${k === 'rot' ? it.rot : it.pose[k]}°`;
+    live();
+  };
+  const F_full = () => ({ ...(forsaMod ? forsaMod.fullPose(it.pose) : pose) });
+  box.onchange = e => { if (e.target.dataset.j) { dragging = false; changed(); } };
+  box.onclick = e => {
+    const a = e.target.closest('button')?.dataset.a;
+    if (!a) return;
+    if (a === 'close') { S.sel = null; emit('selection'); return; }
+    if (a === 'edit') { openLibForm(li); return; }
+    checkpoint();
+    if (a === 'light') it.light = it.light === false;
+    if (a === 'resetpose') it.pose = {};
+    if (a === 'lock') it.locked = !it.locked;
+    if (a === 'del') { L().items = L().items.filter(x => x.id !== it.id); S.sel = null; }
+    changed(); emit('selection');
+  };
+}
+
 function renderArtInspector(box, it, li) {
   const walls = wallsNow();
   const doorsHere = P().room.doors.map((d, j) => ({ d, j })).filter(o => o.d.wall === it.wall);
@@ -214,7 +280,10 @@ function renderArtInspector(box, it, li) {
 
 function renderInspector() {
   const box = $('#inspector');
-  box.onchange = null;
+  box.onchange = null; box.oninput = null;
+  box.classList.remove('wide');
+  const cur = selItem(), curLi = cur && lib(cur.libId);
+  if (cur && isModel(curLi)) return renderModelInspector(box, cur, curLi); // 檯燈在 2D、3D 都能調
   if (view !== '2d') { box.hidden = true; return; }
   const win = selWindow();
   if (win) return renderWinInspector(box, win);
@@ -369,6 +438,7 @@ function placeItem(li) {
   while (lay.items.some(i => Math.abs(i.x - x) < 1 && Math.abs(i.y - y) < 1)) { x += 150; y += 150; }
   checkpoint();
   const it = { id: uid(), libId: li.id, x, y, rot: 0, locked: false };
+  if (isModel(li)) { it.pose = {}; it.light = true; }
   lay.items.push(it);
   S.sel = it.id;
   changed(); emit('selection');
@@ -385,6 +455,11 @@ function openLibForm(src) {
     <div class="form">
       <label>名稱<input data-f="name" value="${esc(f.name)}" placeholder="例如：舊衣裳箱、客廳地毯"></label>
       <label>類型<select data-f="shape">${Object.entries(SHAPES).map(([k, v]) => `<option value="${k}" ${f.shape === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <div data-modelbox hidden class="form">
+        <label>配色<select data-f="palette">${Object.entries(MODEL_PALETTES).map(([k, [n]]) => `<option value="${k}" ${(f.palette || 'mine') === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <p class="mute small">依你的 FORSÅ 實物建模：底座 Ø15、預設高約 36 cm。放進空間後，在右側面板調關節、開關燈；放在桌子上會自動坐到桌面。</p>
+      </div>
+      <div data-normal class="form">
       <div class="grid3">
         <label><span><span data-lw>寬</span>（cm）</span><input data-f="w" type="number" inputmode="decimal" step="0.1" value="${cm(f.w)}"></label>
         <label><span><span data-ld>深</span>（cm）</span><input data-f="d" type="number" inputmode="decimal" step="0.1" value="${cm(f.d)}"></label>
@@ -397,6 +472,7 @@ function openLibForm(src) {
         <button data-t="none">純色</button><button data-t="fit">照片貼頂面</button><button data-t="tile">材質重複鋪貼</button>
       </div>
       <div data-texbox></div>
+      </div>
       <label>標籤（用逗號分開，可以有很多個）<input data-f="tags" value="${esc((f.tags || []).join(', '))}" placeholder="自己的, 老物件, 收納"></label>
       <div class="tagbar" data-tagsugg></div>
       <label>備註<textarea data-f="notes" rows="3" placeholder="來源、年代、用途，例如：搬家時可裝約 40 本書">${esc(f.notes || '')}</textarea></label>
@@ -411,6 +487,9 @@ function openLibForm(src) {
 
   const syncDimLabels = () => {
     const shape = q('[data-f="shape"]').value;
+    q('[data-modelbox]').hidden = shape !== 'model';
+    q('[data-normal]').hidden = shape === 'model';
+    if (shape === 'model' && !q('[data-f="name"]').value.trim()) q('[data-f="name"]').value = 'FORSÅ 工作燈';
     const wall = shape === 'wall';
     q('[data-lw]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／寬' : '寬';
     q('[data-ld]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／深' : wall ? '厚度' : '深';
@@ -477,8 +556,12 @@ function openLibForm(src) {
     f.name = q('[data-f="name"]').value.trim() || '未命名物品';
     f.shape = q('[data-f="shape"]').value;
     f.w = num(q('[data-f="w"]').value, f.w); f.d = num(q('[data-f="d"]').value, f.d); f.h = num(q('[data-f="h"]').value, f.h);
+    if (f.shape === 'model') {
+      f.model = 'forsa'; f.palette = q('[data-f="palette"]').value;
+      f.w = f.d = 150; f.h = 360; f.color = MODEL_PALETTES[f.palette][1]; f.texMode = 'none';
+    }
     if (!(f.w > 0 && f.d > 0 && f.h > 0)) { toast('寬、深、高都要大於 0'); return; }
-    f.color = q('[data-f="color"]').value;
+    if (f.shape !== 'model') f.color = q('[data-f="color"]').value;
     f.tags = q('[data-f="tags"]').value.split(/[,，、]/).map(s => s.trim()).filter(Boolean);
     f.notes = q('[data-f="notes"]').value;
     if (f.texMode === 'tile') { f.tileW = num(q('[data-f="tileW"]').value, f.tileW); f.tileH = num(q('[data-f="tileH"]').value, f.tileH); }
@@ -1063,7 +1146,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.6.3・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.7・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1130,9 +1213,12 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.6.3');
+        const { View3D } = await import('./view3d.js?v=0.7');
         $('#v3d').innerHTML = '';
-        v3d = new View3D($('#v3d'), { onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; } });
+        v3d = new View3D($('#v3d'), {
+          onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
+          onPickItem: id => { S.sel = id; emit('selection'); },
+        });
         v3d.bindJoystick($('#joy'));
         if (sun.on) applySun();
       } catch (err) {
@@ -1266,7 +1352,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.6.3';
+const APP_VERSION = '0.7';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;

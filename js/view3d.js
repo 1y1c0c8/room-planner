@@ -1,9 +1,11 @@
 // 3D 檢視：環繞（看整體）與走動（第一人稱）。只負責「看」，擺放在 2D 做。
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { S, P, L, lib, isRug, isRound, isWall, getImg } from './state.js?v=0.6.3';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom } from './geom.js?v=0.6.3';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.6.3';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg } from './state.js?v=0.7';
+import { createForsa, fullPose } from './forsa.js?v=0.7';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.7';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.7';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -49,6 +51,10 @@ export class View3D {
     el.appendChild(r.domElement);
 
     this.scene = new THREE.Scene();
+    // 淡淡的環境反射，讓鍍鉻、亮面烤漆（例如檯燈）看得出金屬感
+    this.scene.environment = new THREE.PMREMGenerator(r).fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.3;
+    this.lamps = new Map(); // 物件 id → { lamp, outer }
     this.scene.background = new THREE.Color('#dde3e4');
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.03, 200);
     this.camera.rotation.order = 'YXZ';
@@ -142,6 +148,8 @@ export class View3D {
 
   // ---------- 建立場景 ----------
   clear() {
+    for (const { lamp } of this.lamps.values()) lamp.dispose();
+    this.lamps.clear();
     for (const o of [...this.group.children]) {
       o.traverse(c => { if (c.geometry) c.geometry.dispose(); });
       this.group.remove(o);
@@ -344,6 +352,7 @@ export class View3D {
         if (it.host && leafOf.has(it.host)) { this.makeDoorArt(it, li, leafOf.get(it.host)); continue; }
         const m = this.makeArt(it, li, walls); if (m) this.group.add(m); continue;
       }
+      if (isModel(li)) { this.makeModel(it, li, lay); if (!supportOf(lay, it, lib)) this.col.items.push({ it, li }); continue; }
       const rug = isRug(li);
       const mesh = this.makeItem(it, li, rug ? rugN++ : 0);
       this.group.add(mesh);
@@ -498,16 +507,45 @@ export class View3D {
     o.target = o.target > 0.5 ? 0 : o.base;
     this.doorOpen.set(id, o.target > 0.5);
   }
+  // 點一下：門＝開關，特製模型（檯燈）＝選取以調整姿勢
   pickDoor(clientX, clientY) {
     const r = this.renderer.domElement.getBoundingClientRect();
     const ndc = document.pointerLockElement ? new THREE.Vector2(0, 0)
       : new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
-    const hit = ray.intersectObjects(this.doorObjs.map(o => o.pivot), true)[0];
-    const id = hit?.object.userData.doorId;
-    if (id) { this.toggleDoor(id); return true; }
+    const targets = [...this.doorObjs.map(o => o.pivot), ...[...this.lamps.values()].map(l => l.outer)];
+    const hit = ray.intersectObjects(targets, true)[0];
+    if (!hit) return false;
+    let o = hit.object;
+    while (o && !o.userData.doorId && !o.userData.itemId) o = o.parent;
+    if (o?.userData.doorId) { this.toggleDoor(o.userData.doorId); return true; }
+    if (o?.userData.itemId) { this.ui.onPickItem?.(o.userData.itemId); return true; }
     return false;
+  }
+
+  // 特製模型：檯燈（模型以公分建，外層縮成公尺；坐在底下傢俱的頂面）
+  makeModel(it, li, lay) {
+    const lamp = createForsa({ palette: li.palette || 'mine' });
+    const outer = new THREE.Group();
+    outer.scale.setScalar(0.01);
+    const sup = supportOf(lay, it, lib);
+    outer.position.set(it.x * M, (sup ? sup.h : 0) * M, it.y * M);
+    outer.rotation.y = (-it.rot * Math.PI) / 180;
+    outer.userData.itemId = it.id;
+    outer.add(lamp.root);
+    lamp.setPose(fullPose(it.pose));
+    lamp.setLight(it.light !== false);
+    this.group.add(outer);
+    this.lamps.set(it.id, { lamp, outer });
+  }
+  // 調姿勢時即時更新，不重建整個場景
+  updateModel(it) {
+    const l = this.lamps.get(it.id);
+    if (!l) return;
+    l.lamp.setPose(fullPose(it.pose));
+    l.lamp.setLight(it.light !== false);
+    l.outer.rotation.y = (-it.rot * Math.PI) / 180;
   }
 
   makeArt(it, li, walls) {
