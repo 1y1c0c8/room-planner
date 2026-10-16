@@ -3,13 +3,13 @@ import {
   S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.10.1';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.10.1';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.10.1';
-import { Plan2D } from './plan2d.js?v=0.10.1';
-import { rectify } from './rectify.js?v=0.10.1';
-import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.10.1';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.10.1';
+} from './state.js?v=0.10.2';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.10.2';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.10.2';
+import { Plan2D } from './plan2d.js?v=0.10.2';
+import { rectify } from './rectify.js?v=0.10.2';
+import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.10.2';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.10.2';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -17,7 +17,7 @@ const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形
 // 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
 const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
 let forsaMod = null;
-const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.10.1'));
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.10.2'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => [['clear', '透明'], ['frosted', '霧面（壓花）'], ['mirror', '反光（單向鏡）']]
@@ -238,6 +238,8 @@ function renderArtInspector(box, it, li) {
       <label>掛在<select data-k="wall">${walls.map((w, i) => `<option value="${i}" ${it.wall === i ? 'selected' : ''}>${wallName(i, walls.length)}</option>`).join('')}</select></label>
       ${doorsHere.length ? `<label>貼在<select data-k="host"><option value="">牆面</option>${doorsHere.map(({ d, j }) => ['in', 'out'].map(f => `<option value="${d.id}|${f}" ${it.host === d.id && (it.face || 'in') === f ? 'selected' : ''}>${esc(nm(d, `門 ${j + 1}`))}（${f === 'in' ? '室內側' : '門外側'}）</option>`).join('')).join('')}</select></label>` : ''}
       <label>中心離地（cm）<input data-k="elev" type="number" inputmode="decimal" step="0.1" value="${cm(it.elev)}"></label>
+      <label>朝外的面<select data-k="showBack"><option value="">正面</option><option value="1" ${it.showBack ? 'selected' : ''}>背面（翻過來掛）</option></select></label>
+      ${it.showBack && resolveFace(li, 'back').kind === 'color' ? '<p class="mute small">背面還沒有照片：到物品庫 → 編輯物品 → 各面 → 背面 設定。</p>' : ''}
     </div>
     <div class="btns">
       <button data-a="lock" class="${it.locked ? 'on' : ''}">${it.locked ? '🔒 已鎖定' : '🔓 鎖定'}</button>
@@ -266,6 +268,12 @@ function renderArtInspector(box, it, li) {
       plan.openWall(wi, it.id);
     }
     if (k === 'elev') { const v = toMM(e.target.value); if (v >= 0) { checkpoint(); it.elev = v; changed(); } }
+    if (k === 'showBack') {
+      checkpoint();
+      if (e.target.value) it.showBack = true; else delete it.showBack;
+      changed(); emit('selection');
+      toast(it.showBack ? '已翻面：背面朝房內（只影響這個擺法）' : '已改回正面朝房內');
+    }
   };
   box.onclick = e => {
     const a = e.target.closest('button')?.dataset.a;
@@ -1295,7 +1303,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.10.1・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.10.2・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1362,7 +1370,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.10.1');
+        const { View3D } = await import('./view3d.js?v=0.10.2');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), {
           onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
@@ -1502,7 +1510,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.10.1';
+const APP_VERSION = '0.10.2';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;

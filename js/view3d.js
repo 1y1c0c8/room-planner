@@ -3,12 +3,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg, radii } from './state.js?v=0.10.1';
-import { roundedBoxGeometry } from './rounded.js?v=0.10.1';
-import { resolveFace, faceDims } from './faces.js?v=0.10.1';
-import { createForsa, fullPose } from './forsa.js?v=0.10.1';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.10.1';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.10.1';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg, radii } from './state.js?v=0.10.2';
+import { roundedBoxGeometry } from './rounded.js?v=0.10.2';
+import { resolveFace, faceDims } from './faces.js?v=0.10.2';
+import { createForsa, fullPose } from './forsa.js?v=0.10.2';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.10.2';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.10.2';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -561,7 +561,7 @@ export class View3D {
     const z = out ? -o.side * (o.ft + 10 + dd / 2 + 1) : -o.side * (10 - dd / 2 - 1);
     mesh.position.set(Math.abs(t - o.g.hingeT) * M, it.elev * M, z * M);
     const faceDir = out ? -o.side : o.side; // 正面朝外
-    if (faceDir < 0) mesh.rotation.y = Math.PI;
+    mesh.rotation.y = (faceDir < 0 ? Math.PI : 0) + (it.showBack ? Math.PI : 0); // showBack：雙面畫框翻過來掛
     mesh.castShadow = true;
     mesh.userData.doorId = it.host;
     o.pivot.add(mesh);
@@ -641,7 +641,7 @@ export class View3D {
     const right = { x: W.n.y, y: -W.n.x }; // 站在房內面對牆時的右手方向＝物件的 +x
     const c = V.add(V.add(W.a, V.scale(W.u, it.off)), V.scale(W.n, (d / M) / 2 + 1));
     mesh.position.set(c.x * M, it.elev * M, c.y * M);
-    mesh.rotation.y = Math.atan2(-right.y, right.x);
+    mesh.rotation.y = Math.atan2(-right.y, right.x) + (it.showBack ? Math.PI : 0); // showBack：背面朝房內
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;

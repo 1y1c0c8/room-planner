@@ -1,8 +1,8 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
-import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.10.1';
-import { resolveFace, faceToward } from './faces.js?v=0.10.1';
-import { V, segDist, cm, clamp } from './util.js?v=0.10.1';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.10.1';
+import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.10.2';
+import { resolveFace, faceToward } from './faces.js?v=0.10.2';
+import { V, segDist, cm, clamp } from './util.js?v=0.10.2';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.10.2';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
@@ -57,7 +57,7 @@ export class Elev {
       if (!li || !isWall(li) || it.wall !== this.wall) continue;
       const hd = it.host ? doorById.get(it.host) : null;
       const t = hd ? hd.off + it.off : it.off;
-      objs.push({ kind: 'art', id: it.id, ref: it, li, x: X(t), z: it.elev, w: li.w, h: li.h, locked: it.locked, label: li.name + (hd && it.face === 'out' ? '（門外側）' : ''), door: hd, outside: hd && it.face === 'out' });
+      objs.push({ kind: 'art', id: it.id, ref: it, li, x: X(t), z: it.elev, w: li.w, h: li.h, locked: it.locked, label: li.name + (hd && it.face === 'out' ? '（門外側）' : '') + (it.showBack ? '（背面朝外）' : ''), door: hd, outside: hd && it.face === 'out' });
     }
     const doors = (p.room.doors || []).map((d, j) => ({ d, j })).filter(o => o.d.wall === this.wall).map(({ d, j }) => {
       const a = X(d.off), b = X(d.off + d.w), fw = doorFrame(d);
@@ -264,7 +264,7 @@ export class Elev {
         ctx.beginPath(); ctx.moveTo(r.x + r.w / 2, r.y); ctx.lineTo(r.x + r.w / 2, r.y + r.h);
         ctx.lineWidth = 1.5; ctx.stroke();
       } else {
-        const fc = resolveFace(o.li, 'front');
+        const fc = resolveFace(o.li, o.ref.showBack ? 'back' : 'front');
         ctx.fillStyle = fc.kind === 'color' ? fc.color : o.li.color; ctx.fill();
         const img = fc.tex ? getImg(fc.tex) : null;
         if (img) {

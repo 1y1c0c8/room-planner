@@ -1,8 +1,8 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.10.1';
-import { uid } from './util.js?v=0.10.1';
-import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.10.1';
-import { faceTexIds } from './faces.js?v=0.10.1';
+import { db } from './db.js?v=0.10.2';
+import { uid } from './util.js?v=0.10.2';
+import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.10.2';
+import { faceTexIds } from './faces.js?v=0.10.2';
 
 export const S = {
   library: [],
