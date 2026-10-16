@@ -5,7 +5,7 @@
 export const FACE_SETS = {
   box: [['top', '頂'], ['front', '前'], ['right', '右'], ['back', '後'], ['left', '左'], ['bottom', '底']],
   cyl: [['top', '頂'], ['side', '側面'], ['bottom', '底']],
-  wall: [['front', '正面'], ['top', '上緣'], ['right', '右緣'], ['bottom', '下緣'], ['left', '左緣']],
+  wall: [['front', '正面'], ['top', '上緣'], ['right', '右緣'], ['back', '背面'], ['bottom', '下緣'], ['left', '左緣']],
 };
 export const faceSet = li => FACE_SETS[li.shape === 'wall' ? 'wall' : li.shape === 'cyl' ? 'cyl' : li.shape === 'box' ? 'box' : ''] || null;
 export const faceName = (li, key) => (faceSet(li) || []).find(([k]) => k === key)?.[1] || key;
@@ -23,6 +23,7 @@ export function faceDims(li, key) {
 export function faceOrient(li, key) {
   if (li.shape === 'wall') {
     if (key === 'front') return '正對著拍，照片上方＝物件上方';
+    if (key === 'back') return '翻到背面正對著拍，照片上方＝物件上方';
     if (key === 'top') return '照片上方＝靠牆那側';
     if (key === 'bottom') return '照片上方＝朝房內那側';
     return '照片上方＝物件上方';
