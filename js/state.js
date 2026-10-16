@@ -1,7 +1,8 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.9';
-import { uid } from './util.js?v=0.9';
-import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.9';
+import { db } from './db.js?v=0.10';
+import { uid } from './util.js?v=0.10';
+import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.10';
+import { faceTexIds } from './faces.js?v=0.10';
 
 export const S = {
   library: [],
@@ -200,7 +201,7 @@ export async function deleteLib(id) {
   const li = lib(id);
   S.library = S.library.filter(x => x.id !== id);
   await db.del('library', id);
-  if (li?.tex) await delImage(li.tex);
+  if (li) for (const t of faceTexIds(li)) await delImage(t);
   if (S.sel && !selItem()) S.sel = null;
   clearHistory();
   emit('library'); emit('project'); emit('selection');

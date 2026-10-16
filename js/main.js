@@ -3,12 +3,13 @@ import {
   S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.9';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.9';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.9';
-import { Plan2D } from './plan2d.js?v=0.9';
-import { rectify } from './rectify.js?v=0.9';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.9';
+} from './state.js?v=0.10';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.10';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.10';
+import { Plan2D } from './plan2d.js?v=0.10';
+import { rectify } from './rectify.js?v=0.10';
+import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.10';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.10';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -16,7 +17,7 @@ const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形
 // 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
 const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
 let forsaMod = null;
-const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.9'));
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.10'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => [['clear', '透明'], ['frosted', '霧面（壓花）'], ['mirror', '反光（單向鏡）']]
@@ -370,7 +371,8 @@ function hideDistance() { const b = $('#distSheet'); b.hidden = true; b.innerHTM
 
 // ---------- 物品庫 ----------
 function thumbHTML(li) {
-  const img = li.tex && li.texMode !== 'none' ? getImg(li.tex) : null;
+  const fc = resolveFace(li, li.shape === 'wall' ? 'front' : 'top');
+  const img = fc.tex ? getImg(fc.tex) : null;
   const shape = isRound(li) ? 'round' : '';
   return img
     ? `<div class="thumb ${shape}" style="background-image:url(${img.src});background-color:${esc(li.color)}"></div>`
@@ -474,11 +476,17 @@ function openLibForm(src) {
       </div>
       <p class="mute small" data-roundhint>R＝從上面看的四個角（2D 看得到）；r＝桌緣、床墊那種頂面一圈的圓邊（側面看得到）。兩個一樣大就是圓潤的箱子。填 0＝直角。</p>
       <label>底色<input data-f="color" type="color" value="${esc(f.color)}"></label>
-      <div class="lbl">外觀</div>
+      <div class="lbl">整體外觀</div>
       <div class="seg" data-texseg>
         <button data-t="none">純色</button><button data-t="fit">照片貼頂面</button><button data-t="tile">材質重複鋪貼</button>
       </div>
       <div data-texbox></div>
+      <div data-facesec>
+        <div class="lbl">各面（選填）</div>
+        <p class="mute small">沒設定的面跟「整體外觀」一樣。點一面來設定照片、顏色或材質。</p>
+        <div class="facenet" data-net></div>
+        <div data-faceed></div>
+      </div>
       </div>
       <label>標籤（用逗號分開，可以有很多個）<input data-f="tags" value="${esc((f.tags || []).join(', '))}" placeholder="自己的, 老物件, 收納"></label>
       <div class="tagbar" data-tagsugg></div>
@@ -491,6 +499,118 @@ function openLibForm(src) {
     </div>`);
   const el = m.el;
   const q = s => el.querySelector(s);
+
+  // ---------- 各面 ----------
+  f.faces = f.faces || {};
+  const origTex = faceTexIds(src || {});
+  const pend = new Map(); // 面 → 剛選的照片 { blob, url }（存檔時才寫進資料庫）
+  let fsel = null;
+  const AREA = { top: 't', front: 'f', right: 'r', back: 'b', left: 'l', bottom: 'u', side: 's' };
+  const liNow = () => ({ ...f, shape: q('[data-f="shape"]').value, color: q('[data-f="color"]').value, tex: newURL ? '__main' : f.tex,
+    w: num(q('[data-f="w"]').value, f.w), d: num(q('[data-f="d"]').value, f.d), h: num(q('[data-f="h"]').value, f.h) });
+  const urlOf = id => (id === '__main' ? newURL : id?.startsWith('new:') ? pend.get(id.slice(4))?.url : id ? getImg(id)?.src : null);
+  const renderNet = () => {
+    const li = liNow(), set = faceSet(li);
+    q('[data-facesec]').hidden = !set;
+    if (!set) { fsel = null; q('[data-faceed]').innerHTML = ''; return; }
+    if (fsel && !set.some(([k]) => k === fsel)) fsel = null;
+    const net = q('[data-net]');
+    net.className = `facenet ${li.shape}`;
+    net.innerHTML = set.map(([k, name]) => {
+      const fc = resolveFace(li, k), mode = f.faces[k]?.mode || 'inherit', u = urlOf(fc.tex);
+      const bg = u ? `background:${esc(li.color)} url(${u}) center/${fc.kind === 'tile' ? '36px' : fc.kind === 'extend' ? '2px 100%' : 'cover'}` : `background:${esc(fc.kind === 'color' ? fc.color : li.color)}`;
+      const tag = mode === 'same' ? `＝${faceName(li, f.faces[k].src)}${f.faces[k].flip ? '↔' : ''}` : '';
+      return `<button type="button" class="fcell ${mode === 'inherit' ? 'inh' : ''} ${fsel === k ? 'on' : ''}" data-fk="${k}" style="grid-area:${AREA[k]}">
+        <span class="fimg" style="${bg}${fc.flip ? ';transform:scaleX(-1)' : ''}"></span><span class="flbl">${name}${tag}</span></button>`;
+    }).join('');
+  };
+  const renderFaceEd = () => {
+    const box = q('[data-faceed]');
+    if (!fsel) { box.innerHTML = ''; return; }
+    const li = liNow(), set = faceSet(li), cur = f.faces[fsel] || { mode: 'inherit' }, [fw, fh] = faceDims(li, fsel);
+    const wall = li.shape === 'wall', side = ['front', 'back', 'left', 'right'].includes(fsel);
+    const modes = [['inherit', '跟整體'], ['color', '純色'], ['photo', '照片'], ['tile', '材質重複'], ['same', '同另一面'], ...(wall && fsel !== 'front' ? [['extend', '延伸正面照片']] : [])];
+    const u = urlOf(cur.tex);
+    const pick = `<div class="texrow">${u ? `<img src="${u}" class="texprev">` : '<div class="texprev empty">尚未選照片</div>'}
+      <label class="btn">${u ? '換一張照片' : '選擇照片'}<input type="file" accept="image/*" hidden data-ffile></label></div>`;
+    const body = {
+      inherit: '<p class="mute small">跟整體外觀一樣。</p>',
+      color: `<label>這一面的顏色<input type="color" data-fcolor value="${esc(cur.color || li.color)}"></label>`,
+      photo: `<p class="mute small">${faceOrient(li, fsel)}。接著拖四個角校正，比例會用這一面的實際尺寸。</p>${pick}`,
+      tile: `<p class="mute small">拍一塊木紋或布料，框出一個區域並填它實際多大，這一面會重複鋪滿。</p>
+        <div class="grid2"><label>框選區域寬（cm）<input data-ftw type="number" inputmode="decimal" step="0.1" value="${cm(cur.tileW || 300)}"></label>
+        <label>框選區域高（cm）<input data-fth type="number" inputmode="decimal" step="0.1" value="${cm(cur.tileH || 300)}"></label></div>${pick}`,
+      same: `<label>跟哪一面一樣<select data-fsrc>${set.filter(([k]) => k !== fsel).map(([k, n]) => `<option value="${k}" ${cur.src === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label class="chk"><input type="checkbox" data-fflip ${cur.flip ? 'checked' : ''}> 左右反轉</label>`,
+      extend: '<p class="mute small">把正面照片最外圈的顏色拉到這條邊，像畫布包框。正面要先有照片。</p>',
+    }[cur.mode || 'inherit'];
+    box.innerHTML = `<div class="faceed">
+      <div><b>${faceName(li, fsel)}</b> <span class="mute small">${cm(fw)} × ${cm(fh)} cm</span></div>
+      <div class="seg small wrap" data-fmodes>${modes.map(([m, t]) => `<button type="button" data-fm="${m}" class="${(cur.mode || 'inherit') === m ? 'on' : ''}">${t}</button>`).join('')}</div>
+      ${body}
+      <div class="btns">
+        ${li.shape === 'box' && side ? '<button type="button" data-fq="sides">其他側面＝這一面</button>' : ''}
+        ${li.shape === 'box' && (fsel === 'front' || fsel === 'back') ? '<button type="button" data-fq="backmirror">後面＝前面左右反轉</button>' : ''}
+        ${wall ? '<button type="button" data-fq="edges">四邊都延伸正面照片</button>' : ''}
+        <button type="button" data-fq="clear" class="danger">清除這面</button>
+      </div></div>`;
+  };
+  const refreshFaces = () => { renderNet(); renderFaceEd(); };
+  q('[data-net]').onclick = e => {
+    const k = e.target.closest('[data-fk]')?.dataset.fk;
+    if (!k) return;
+    fsel = fsel === k ? null : k;
+    refreshFaces();
+  };
+  const faceBox = q('[data-faceed]');
+  faceBox.onclick = e => {
+    const b = e.target.closest('button');
+    if (!b || !fsel) return;
+    const set = faceSet(liNow()).map(([k]) => k);
+    if (b.dataset.fm) {
+      const m = b.dataset.fm, cur = { ...(f.faces[fsel] || {}), mode: m };
+      if (m === 'same' && (!cur.src || cur.src === fsel)) cur.src = set.find(k => k !== fsel && (k === 'front' || k === 'side')) || set.find(k => k !== fsel);
+      f.faces[fsel] = cur;
+    }
+    const q2 = b.dataset.fq;
+    // 「同另一面」要指到真正有內容的那一面，避免互相指來指去
+    const root = k => { for (let i = 0; i < 6 && f.faces[k]?.mode === 'same'; i++) k = f.faces[k].src; return k; };
+    if (q2 === 'sides') { const r = root(fsel); for (const k of ['front', 'back', 'left', 'right']) if (k !== r) f.faces[k] = { mode: 'same', src: r }; }
+    if (q2 === 'backmirror') { const r = root('front'); if (r === 'back') toast('前面目前是跟後面一樣，先把前面設成照片或顏色'); else f.faces.back = { mode: 'same', src: r, flip: true }; }
+    if (q2 === 'edges') for (const k of ['top', 'right', 'bottom', 'left']) f.faces[k] = { mode: 'extend' };
+    if (q2 === 'clear') { delete f.faces[fsel]; pend.delete(fsel); }
+    refreshFaces();
+  };
+  faceBox.oninput = e => {
+    const cur = f.faces[fsel];
+    if (!cur) return;
+    if (e.target.matches('[data-fcolor]')) { cur.color = e.target.value; renderNet(); }
+  };
+  faceBox.onchange = async e => {
+    const cur = f.faces[fsel], t = e.target;
+    if (!cur) return;
+    if (t.matches('[data-fsrc]')) cur.src = t.value;
+    if (t.matches('[data-fflip]')) cur.flip = t.checked;
+    if (t.matches('[data-ftw]')) cur.tileW = num(t.value, 300);
+    if (t.matches('[data-fth]')) cur.tileH = num(t.value, 300);
+    if (t.matches('[data-ffile]')) {
+      const file = t.files[0], li = liNow(), key = fsel;
+      if (!file) return;
+      const [fw, fh] = faceDims(li, key);
+      if (cur.mode === 'tile') { cur.tileW = num(faceBox.querySelector('[data-ftw]')?.value, 300); cur.tileH = num(faceBox.querySelector('[data-fth]')?.value, 300); }
+      const aspect = cur.mode === 'tile' ? cur.tileW / Math.max(1, cur.tileH) : fw / Math.max(1, fh);
+      const blob = await rectify(file, { aspect, title: cur.mode === 'tile' ? `框選「${faceName(li, key)}」的材質區域` : `校正「${faceName(li, key)}」照片`, orient: faceOrient(li, key) });
+      if (!blob) return;
+      const old = pend.get(key);
+      if (old) URL.revokeObjectURL(old.url);
+      pend.set(key, { blob, url: URL.createObjectURL(blob) });
+      cur.tex = 'new:' + key;
+      refreshFaces();
+      return;
+    }
+    renderNet();
+  };
+  q('[data-f="color"]').addEventListener('input', renderNet);
 
   const syncDimLabels = () => {
     const shape = q('[data-f="shape"]').value;
@@ -512,6 +632,7 @@ function openLibForm(src) {
     if (isRug({ shape: e.target.value }) && num(q('[data-f="h"]').value) > 50) q('[data-f="h"]').value = '1.0';
     if (e.target.value === 'wall' && num(q('[data-f="d"]').value) > 150) q('[data-f="d"]').value = '2.0';
     if (f.texMode !== 'none') renderTex();
+    refreshFaces();
   };
   syncDimLabels();
 
@@ -542,16 +663,17 @@ function openLibForm(src) {
       newBlob = blob;
       if (newURL) URL.revokeObjectURL(newURL);
       newURL = URL.createObjectURL(blob);
-      renderTex();
+      renderTex(); renderNet();
     };
   };
   q('[data-texseg]').onclick = e => {
     const t = e.target.closest('button')?.dataset.t;
     if (!t) return;
     if (f.texMode === 'tile') { f.tileW = num(q('[data-f="tileW"]')?.value, f.tileW); f.tileH = num(q('[data-f="tileH"]')?.value, f.tileH); }
-    f.texMode = t; renderTex();
+    f.texMode = t; renderTex(); renderNet();
   };
   renderTex();
+  refreshFaces();
 
   el.querySelector('.btns').onclick = async e => {
     const a = e.target.closest('button')?.dataset.a;
@@ -581,6 +703,10 @@ function openLibForm(src) {
       if (old) delImage(old);
     }
     if (f.texMode !== 'none' && !f.tex) f.texMode = 'none';
+    for (const [k, { blob }] of pend) if (f.faces[k]?.tex === 'new:' + k) f.faces[k].tex = await putImage(blob);
+    for (const k of Object.keys(f.faces)) if (!f.faces[k] || f.faces[k].mode === 'inherit' && !f.faces[k].tex) delete f.faces[k];
+    const keep = new Set(faceTexIds(f));
+    for (const t of origTex) if (!keep.has(t)) delImage(t); // 換掉的照片
     await saveLib(f);
     m.close();
     if (isNew && confirm(`已建立「${f.name}」。要直接放進目前的空間嗎？`)) placeItem(f);
@@ -1169,7 +1295,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.9・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.10・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1236,7 +1362,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.9');
+        const { View3D } = await import('./view3d.js?v=0.10');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), {
           onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
@@ -1376,7 +1502,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.9';
+const APP_VERSION = '0.10';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;

@@ -118,6 +118,7 @@ input[type=checkbox] { width: auto; accent-color: var(--accent); }
 .form { display: flex; flex-direction: column; gap: 10px; }
 .form label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--mute); }
 .form label.btn { flex-direction: row; color: var(--ink); font-size: 14px; }
+.form label.chk { flex-direction: row; align-items: center; }
 .lbl { font-weight: 650; font-size: 13px; margin-top: 8px; color: var(--ink); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
@@ -229,3 +230,16 @@ ul.help li { margin-bottom: 4px; }
   .proj { max-width: 40vw; }
   .wrow { grid-template-columns: 52px 1fr 96px auto; }
 }
+
+/* 各面展開圖 */
+.facenet { display: grid; gap: 4px; grid-template-columns: repeat(4, 58px); grid-auto-rows: 58px; }
+.facenet.box { grid-template-areas: ". t . ." "l f r b" ". u . ."; }
+.facenet.wall { grid-template-columns: repeat(3, 58px); grid-template-areas: ". t ." "l f r" ". u ."; }
+.facenet.cyl { grid-template-columns: 58px 116px 58px; grid-template-areas: "t s u"; }
+.fcell { position: relative; padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+.fcell .fimg { position: absolute; inset: 0; background-size: cover; background-position: center; }
+.fcell.inh .fimg { opacity: .45; }
+.fcell .flbl { position: absolute; left: 3px; bottom: 3px; font-size: 11px; line-height: 1.5; background: rgba(255,253,249,.9); border-radius: 5px; padding: 0 4px; }
+.fcell.on { outline: 2.5px solid var(--accent); outline-offset: 1px; }
+.faceed { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.seg.wrap { flex-wrap: wrap; }

@@ -1,7 +1,8 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
-import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.9';
-import { V, segDist, cm, clamp } from './util.js?v=0.9';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.9';
+import { S, P, L, lib, isRug, isWall, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.10';
+import { resolveFace, faceToward } from './faces.js?v=0.10';
+import { V, segDist, cm, clamp } from './util.js?v=0.10';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.10';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
@@ -74,7 +75,7 @@ export class Elev {
       const t0 = Math.max(0, Math.min(...ts)), t1 = Math.min(Lw, Math.max(...ts));
       if (t1 - t0 < 1) continue;
       const a = X(t0), b = X(t1);
-      furn.push({ id: it.id, li, x0: Math.min(a, b), x1: Math.max(a, b), h: li.h, dist: dmin });
+      furn.push({ id: it.id, li, x0: Math.min(a, b), x1: Math.max(a, b), h: li.h, dist: dmin, face: li.shape === 'box' ? faceToward(it, W.n) : null });
     }
     furn.sort((a, b) => b.dist - a.dist);
 
@@ -231,6 +232,21 @@ export class Elev {
       const fr = this.rect(ctx, f.x0, 0, f.x1, f.h);
       if (er > 0) { ctx.beginPath(); ctx.roundRect(fr.x, fr.y, fr.w, fr.h, [er, er, rd.both ? er : 0, rd.both ? er : 0]); }
       ctx.fillStyle = f.li.color; ctx.fill();
+      // 正對著看的那一面有照片就畫上去（斜放的不畫）
+      const fc = f.face ? resolveFace(f.li, f.face) : null, fim = fc?.tex ? getImg(fc.tex) : null;
+      if (fim) {
+        const x = Math.min(fr.x, fr.x + fr.w), y = Math.min(fr.y, fr.y + fr.h), ww = Math.abs(fr.w), hh = Math.abs(fr.h);
+        ctx.save(); ctx.clip();
+        if (fc.kind === 'tile') {
+          const pat = ctx.createPattern(fim, 'repeat');
+          pat.setTransform(new DOMMatrix().translate(x, y + hh).scale((fc.tileW * s) / fim.naturalWidth, (fc.tileH * s) / fim.naturalHeight));
+          ctx.fillStyle = pat; ctx.fillRect(x, y, ww, hh);
+        } else {
+          if (fc.flip) { ctx.translate(x + ww, y); ctx.scale(-1, 1); ctx.drawImage(fim, 0, 0, ww, hh); }
+          else ctx.drawImage(fim, x, y, ww, hh);
+        }
+        ctx.restore();
+      }
       ctx.globalAlpha = 1;
       ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(60,50,40,.6)'; ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);
       const c = this.toS({ x: (f.x0 + f.x1) / 2, y: f.h / 2 });
@@ -248,15 +264,18 @@ export class Elev {
         ctx.beginPath(); ctx.moveTo(r.x + r.w / 2, r.y); ctx.lineTo(r.x + r.w / 2, r.y + r.h);
         ctx.lineWidth = 1.5; ctx.stroke();
       } else {
-        ctx.fillStyle = o.li.color; ctx.fill();
-        const img = o.li.tex && o.li.texMode !== 'none' ? getImg(o.li.tex) : null;
+        const fc = resolveFace(o.li, 'front');
+        ctx.fillStyle = fc.kind === 'color' ? fc.color : o.li.color; ctx.fill();
+        const img = fc.tex ? getImg(fc.tex) : null;
         if (img) {
-          if (o.li.texMode === 'fit') ctx.drawImage(img, r.x, r.y, r.w, r.h);
-          else {
+          if (fc.kind !== 'tile') {
+            if (fc.flip) { ctx.save(); ctx.translate(r.x + r.w, r.y); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, r.w, r.h); ctx.restore(); }
+            else ctx.drawImage(img, r.x, r.y, r.w, r.h);
+          } else {
             ctx.save(); ctx.clip();
             const pat = ctx.createPattern(img, 'repeat');
-            const k = (o.li.tileW || 300) * s / img.naturalWidth;
-            pat.setTransform(new DOMMatrix().translate(r.x, r.y).scale(k, ((o.li.tileH || 300) * s) / img.naturalHeight));
+            const k = fc.tileW * s / img.naturalWidth;
+            pat.setTransform(new DOMMatrix().translate(r.x, r.y).scale(k, (fc.tileH * s) / img.naturalHeight));
             ctx.fillStyle = pat; ctx.fillRect(r.x, r.y, r.w, r.h);
             ctx.restore();
           }

@@ -1,8 +1,9 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { S, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.9';
-import { Elev } from './elev.js?v=0.9';
-import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.9';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.9';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.10';
+import { resolveFace } from './faces.js?v=0.10';
+import { Elev } from './elev.js?v=0.10';
+import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.10';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.10';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -16,7 +17,7 @@ let forsa = null, forsaLoading = false;
 function needForsa() {
   if (forsa || forsaLoading) return;
   forsaLoading = true;
-  import('./forsa.js?v=0.9').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
+  import('./forsa.js?v=0.10').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
 }
 
 export class Plan2D {
@@ -458,16 +459,18 @@ export class Plan2D {
     if (isRound(li)) ctx.ellipse(0, 0, w / 2, d / 2, 0, 0, Math.PI * 2);
     else if (radii(li).R > 0) ctx.roundRect(-w / 2, -d / 2, w, d, radii(li).R);
     else ctx.rect(-w / 2, -d / 2, w, d);
-    ctx.fillStyle = li.color || C.item;
+    const fc = resolveFace(li, 'top'); // 俯視看到的是頂面
+    ctx.fillStyle = (fc.kind === 'color' ? fc.color : li.color) || C.item;
     ctx.fill();
-    const img = li.tex && li.texMode && li.texMode !== 'none' ? getImg(li.tex) : null;
+    const img = fc.tex ? getImg(fc.tex) : null;
     if (img) {
       ctx.save();
       ctx.clip();
-      if (li.texMode === 'fit') ctx.drawImage(img, -w / 2, -d / 2, w, d);
+      if (fc.flip) ctx.scale(-1, 1);
+      if (fc.kind !== 'tile') ctx.drawImage(img, -w / 2, -d / 2, w, d);
       else {
         const pat = ctx.createPattern(img, 'repeat');
-        pat.setTransform(new DOMMatrix().translate(-w / 2, -d / 2).scale((li.tileW || 300) / img.naturalWidth, (li.tileH || 300) / img.naturalHeight));
+        pat.setTransform(new DOMMatrix().translate(-w / 2, -d / 2).scale(fc.tileW / img.naturalWidth, fc.tileH / img.naturalHeight));
         ctx.fillStyle = pat;
         ctx.fillRect(-w / 2, -d / 2, w, d);
       }
@@ -603,6 +606,14 @@ export class Plan2D {
     ctx.strokeStyle = C.accent; ctx.lineWidth = 2;
     if (isRound(li)) ctx.setLineDash([5, 4]);
     ctx.stroke(); ctx.setLineDash([]);
+    if (li.shape === 'box') {
+      // 標出「前」面（貼各面照片時用）
+      const a = cs[3], b = cs[2], m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.strokeStyle = 'rgba(46,111,100,.75)'; ctx.stroke(); ctx.lineCap = 'butt';
+      ctx.font = '700 11px -apple-system, "PingFang TC", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      this.pill(ctx, m.x, m.y, '前', 'rgba(46,111,100,.92)', '#fff');
+    }
     if (this.pick) return;
     if (!this.drag || this.drag.type !== 'rot')
       for (const dm of this.autoDims(it, D)) this.dimLine(ctx, dm.p1, dm.p2, cm(dm.d), C.dim);

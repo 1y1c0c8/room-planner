@@ -3,11 +3,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg, radii } from './state.js?v=0.9';
-import { roundedBoxGeometry } from './rounded.js?v=0.9';
-import { createForsa, fullPose } from './forsa.js?v=0.9';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.9';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.9';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg, radii } from './state.js?v=0.10';
+import { roundedBoxGeometry } from './rounded.js?v=0.10';
+import { resolveFace, faceDims } from './faces.js?v=0.10';
+import { createForsa, fullPose } from './forsa.js?v=0.10';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.10';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.10';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -162,15 +163,35 @@ export class View3D {
     this.disposables.push(t);
     return t;
   }
-  mat(li, face, fw, fh) {
-    const img = li.tex && li.texMode && li.texMode !== 'none' ? getImg(li.tex) : null;
+  // 某一面的材質（key：top/bottom/front/back/left/right/side，見 faces.js）
+  mat(li, key) {
+    const fc = resolveFace(li, key);
+    const img = fc.tex ? getImg(fc.tex) : null;
     let map = null;
-    if (img && li.texMode === 'fit' && face === 'top') map = this.baseTex(li.tex, img);
-    else if (img && li.texMode === 'tile' && face !== 'bottom') map = this.tiled(li.tex, img, fw / (li.tileW || 300), fh / (li.tileH || 300));
-    const m = new THREE.MeshStandardMaterial({ color: map ? 0xffffff : new THREE.Color(li.color || '#cbbfae'), map, roughness: isRug(li) ? 0.95 : 0.72 });
+    if (img) {
+      const [fw, fh] = faceDims(li, key);
+      if (fc.kind === 'tile') map = this.tiled(fc.tex, img, fw / fc.tileW, fh / fc.tileH);
+      else if (fc.kind === 'photo' && !fc.flip) map = this.baseTex(fc.tex, img);
+      else {
+        map = this.baseTex(fc.tex, img).clone();
+        this.disposables.push(map);
+        if (fc.kind === 'extend') {
+          // 延伸正面照片：只取照片最外圈的一條像素，拉滿這條邊
+          const e = 0.004, ex = fc.edge === 'left' || fc.edge === 'right';
+          map.repeat.set(ex ? e : 1, ex ? 1 : e);
+          map.offset.set(fc.edge === 'right' ? 1 - e : 0, fc.edge === 'top' ? 1 - e : 0);
+        }
+      }
+      if (fc.flip) { map.wrapS = THREE.RepeatWrapping; map.repeat.x *= -1; map.offset.x = 1 - map.offset.x; }
+      map.needsUpdate = true;
+    }
+    const color = fc.kind === 'color' ? fc.color : li.color || '#cbbfae';
+    const m = new THREE.MeshStandardMaterial({ color: map ? 0xffffff : new THREE.Color(color), map, roughness: isRug(li) ? 0.95 : 0.72 });
     this.disposables.push(m);
     return m;
   }
+  // BoxGeometry 的六組材質順序：+x 右、-x 左、+y 頂、-y 底、+z 前、-z 後
+  boxMats(li) { return ['right', 'left', 'top', 'bottom', 'front', 'back'].map(k => this.mat(li, k)); }
 
   // ---------- 建立場景 ----------
   clear() {
@@ -463,15 +484,11 @@ export class View3D {
     let geo, mats;
     if (isRound(li)) {
       geo = new THREE.CylinderGeometry(0.5, 0.5, 1, 56);
-      mats = [this.mat(li, 'side', (Math.PI * (li.w + li.d)) / 2, li.h), this.mat(li, 'top', li.w, li.d), this.mat(li, 'bottom', li.w, li.d)];
+      mats = [this.mat(li, 'side'), this.mat(li, 'top'), this.mat(li, 'bottom')];
     } else {
       const rd = radii(li);
       geo = rd.R > 0 || rd.r > 0 ? roundedBoxGeometry(w, h, d, rd.R * M, rd.r * M, rd.both) : new THREE.BoxGeometry(w, h, d);
-      mats = [
-        this.mat(li, 'side', li.d, li.h), this.mat(li, 'side', li.d, li.h),
-        this.mat(li, 'top', li.w, li.d), this.mat(li, 'bottom', li.w, li.d),
-        this.mat(li, 'side', li.w, li.h), this.mat(li, 'side', li.w, li.h),
-      ];
+      mats = this.boxMats(li);
     }
     const mesh = new THREE.Mesh(geo, mats);
     if (isRound(li)) mesh.scale.set(w, h, d);
@@ -537,11 +554,7 @@ export class View3D {
   // 貼在門片上的物件：掛在門片的轉軸底下，開門時一起轉
   makeDoorArt(it, li, o) {
     const dd = Math.max(li.d, 2);
-    const mats = [
-      this.mat(li, 'side', li.d, li.h), this.mat(li, 'side', li.d, li.h),
-      this.mat(li, 'side', li.w, li.d), this.mat(li, 'side', li.w, li.d),
-      this.mat(li, 'top', li.w, li.h), this.mat(li, 'bottom', li.w, li.h),
-    ];
+    const mats = this.boxMats(li); // 牆面物件：+z＝正面（朝房內），-z＝貼牆的背面
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(li.w * M, li.h * M, dd * M), mats);
     const t = P().room.doors.find(x => x.id === it.host).off + it.off;
     const out = it.face === 'out';
@@ -623,11 +636,7 @@ export class View3D {
     const W = walls[it.wall];
     if (!W) return null;
     const w = li.w * M, h = li.h * M, d = Math.max(li.d, 2) * M;
-    const mats = [
-      this.mat(li, 'side', li.d, li.h), this.mat(li, 'side', li.d, li.h),
-      this.mat(li, 'side', li.w, li.d), this.mat(li, 'side', li.w, li.d),
-      this.mat(li, 'top', li.w, li.h), this.mat(li, 'bottom', li.w, li.h),
-    ];
+    const mats = this.boxMats(li); // 牆面物件：+z＝正面（朝房內），-z＝貼牆的背面
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats);
     const right = { x: W.n.y, y: -W.n.x }; // 站在房內面對牆時的右手方向＝物件的 +x
     const c = V.add(V.add(W.a, V.scale(W.u, it.off)), V.scale(W.n, (d / M) / 2 + 1));
