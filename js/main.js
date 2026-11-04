@@ -3,13 +3,13 @@ import {
   S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.10.2';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.10.2';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.10.2';
-import { Plan2D } from './plan2d.js?v=0.10.2';
-import { rectify } from './rectify.js?v=0.10.2';
-import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.10.2';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.10.2';
+} from './state.js?v=0.10.3';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.10.3';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.10.3';
+import { Plan2D } from './plan2d.js?v=0.10.3';
+import { rectify } from './rectify.js?v=0.10.3';
+import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.10.3';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.10.3';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -17,7 +17,7 @@ const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形
 // 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
 const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
 let forsaMod = null;
-const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.10.2'));
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.10.3'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => [['clear', '透明'], ['frosted', '霧面（壓花）'], ['mirror', '反光（單向鏡）']]
@@ -882,9 +882,10 @@ function renderRoom() {
         <label>時區（UTC＋）<input data-k="tz" type="number" step="0.5" value="${r.tz ?? -new Date().getTimezoneOffset() / 60}"></label>
         <div class="lbl">北方在平面圖的哪個方向</div>
         <div class="seg" data-k="northSeg">${[[0, '上'], [90, '右'], [180, '下'], [270, '左']].map(([v, l]) => `<button data-north="${v}" class="${(r.north || 0) === v ? 'on' : ''}">${l}</button>`).join('')}</div>
-        <label>精確角度（°，從平面圖上方順時針量）<input data-k="north" type="number" inputmode="decimal" step="0.5" value="${r.north || 0}"></label>
+        <label>精確角度（°，從平面圖上方順時針量）<input data-k="north" type="number" inputmode="decimal" step="0.1" value="${r.north || 0}"></label>
         ${'DeviceOrientationEvent' in window && matchMedia('(pointer: coarse)').matches ? '<button data-compass>🧭 用手機指南針量</button>' : ''}
-        <p class="mute small">指南針量法：站在房間裡<b>面向牆 1</b>（平面圖的上方），手機平放、頂端朝前，按下按鈕。左下角的指北針會跟著更新。</p>
+        <p class="mute small">指南針量法：站在房間裡<b>面向牆 1</b>（平面圖的上方），手機平放、頂端朝前，按下按鈕。左下角的指北針會跟著更新。室內的指南針常被螢幕、筆電、鐵窗干擾，偏 10–30° 很常見。</p>
+        <p class="mute small"><b>最準的量法：</b>在 Google 地圖（正北朝上）找到你家外牆，量出某面牆和南北線的夾角。例如牆 4 的窗戶朝 265°（西偏南 5°），精確角度就填 270 − 265 ＝ 5；如果光斑跟實際位置對不上，通常是這個角度需要修正。</p>
       </div>`;
   });
 }
@@ -1303,7 +1304,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.10.2・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.10.3・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1370,7 +1371,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.10.2');
+        const { View3D } = await import('./view3d.js?v=0.10.3');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), {
           onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
@@ -1510,7 +1511,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.10.2';
+const APP_VERSION = '0.10.3';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;
