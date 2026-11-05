@@ -3,13 +3,13 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, getImg, radii } from './state.js?v=0.11.0';
-import { clothOf } from './cloth.js?v=0.11.0';
-import { roundedBoxGeometry } from './rounded.js?v=0.11.0';
-import { resolveFace, faceDims } from './faces.js?v=0.11.0';
-import { createForsa, fullPose } from './forsa.js?v=0.11.0';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.11.0';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.11.0';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, getImg, radii } from './state.js?v=0.12.0';
+import { clothOf, throwOf } from './cloth.js?v=0.12.0';
+import { roundedBoxGeometry } from './rounded.js?v=0.12.0';
+import { resolveFace, faceDims } from './faces.js?v=0.12.0';
+import { createForsa, fullPose } from './forsa.js?v=0.12.0';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.12.0';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.12.0';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -407,6 +407,14 @@ export class View3D {
       const pt = V.add(V.add(w.a, V.scale(w.u, d0.off + d0.w / 2)), V.scale(w.n, BODY_R + 350));
       this.col.door = { x: pt.x * M, z: pt.y * M, nx: w.n.x, nz: w.n.y };
     }
+    // 被桌巾蓋住的傢俱：3D 稍微縮小一點、不畫外框線（布的格點約 4–6 cm，桌緣的直角會從格點之間戳出來）
+    const covered = new Map();
+    for (const it of lay.items) {
+      const li = lib(it.libId);
+      if (!isThrow(li)) continue;
+      const u = supportOf(lay, it, lib);
+      if (u) covered.set(u.id, Math.max(covered.get(u.id) || 0, clamp(Math.max(li.w, li.d) / 26 * 0.4, 8, 25)));
+    }
     for (const it of lay.items) {
       const li = lib(it.libId);
       if (!li) continue;
@@ -415,9 +423,10 @@ export class View3D {
         if (it.host && leafOf.has(it.host)) { this.makeDoorArt(it, li, leafOf.get(it.host)); continue; }
         const m = this.makeArt(it, li, walls); if (m) this.group.add(m); continue;
       }
+      if (isThrow(li)) { this.group.add(this.makeThrow(it, li, lay, walls)); continue; }
       if (isModel(li)) { this.makeModel(it, li, lay); if (!supportOf(lay, it, lib)) this.col.items.push({ it, li }); continue; }
       const rug = isRug(li);
-      const mesh = this.makeItem(it, li, rug ? rugN++ : 0);
+      const mesh = this.makeItem(it, li, rug ? rugN++ : 0, covered.get(it.id) || 0);
       this.group.add(mesh);
       if (!rug && li.h > 250) this.col.items.push({ it, li });
     }
@@ -480,8 +489,9 @@ export class View3D {
     this.sun.target.position.set(b.cx, 0, b.cz);
   }
 
-  makeItem(it, li, rugIdx) {
-    const w = li.w * M, d = li.d * M, h = Math.max(li.h, 3) * M;
+  makeItem(it, li, rugIdx, inset = 0) {
+    const ins = Math.min(inset, li.w / 4, li.d / 4, li.h / 4) * M;
+    const w = li.w * M - 2 * ins, d = li.d * M - 2 * ins, h = Math.max(li.h, 3) * M - ins;
     const rug = isRug(li);
     let geo, mats;
     if (isRound(li)) {
@@ -498,7 +508,7 @@ export class View3D {
     mesh.rotation.y = (-it.rot * Math.PI) / 180;
     mesh.castShadow = !rug;
     mesh.receiveShadow = true;
-    if (!rug) {
+    if (!rug && !ins) {
       const lm = new THREE.LineBasicMaterial({ color: 0x3b3631, transparent: true, opacity: 0.35 });
       this.disposables.push(lm);
       mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), lm));
@@ -653,7 +663,22 @@ export class View3D {
   makeCloth(it, li, walls, lay) {
     const W = walls[it.wall];
     if (!W) return null;
-    const res = clothOf(it, li, W, lay.items, lib);
+    const grp = this.clothMesh(clothOf(it, li, W, lay.items, lib), li, it.showBack);
+    const right = { x: W.n.y, y: -W.n.x };
+    const c = V.add(W.a, V.scale(W.u, it.off));
+    grp.position.set(c.x * M, it.elev * M, c.y * M);
+    grp.rotation.y = Math.atan2(-right.y, right.x);
+    return grp;
+  }
+  // 桌巾、床罩：以平面圖上的中心、地板為原點，跟著物件旋轉
+  makeThrow(it, li, lay, walls) {
+    const grp = this.clothMesh(throwOf(it, li, lay.items, lib, walls), li, it.showBack);
+    grp.position.set(it.x * M, 0, it.y * M);
+    grp.rotation.y = (-it.rot * Math.PI) / 180;
+    return grp;
+  }
+  // 模擬結果 → 網格（正面朝格子的法線方向；背面用另一面的材質）
+  clothMesh(res, li, showBack) {
     const { nx, ny, pos } = res;
     const g = new THREE.BufferGeometry();
     const p = new Float32Array(pos.length), uv = new Float32Array(nx * ny * 2), idx = [];
@@ -667,9 +692,10 @@ export class View3D {
     g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     g.setIndex(idx);
     g.computeVertexNormals();
-    const inKey = it.showBack ? 'back' : 'front', outKey = it.showBack ? 'front' : 'back';
+    const inKey = showBack ? 'back' : 'front', outKey = showBack ? 'front' : 'back';
     const front = this.mat(li, inKey), back = this.mat(li, outKey);
     front.roughness = back.roughness = 0.9;
+    for (const m of [front, back]) Object.assign(m, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }); // 布只離傢俱幾 mm：讓它蓋過底下傢俱的外框線
     front.side = THREE.FrontSide; back.side = THREE.BackSide;
     if (back.map) { // 從背後看，u 是反的：把圖左右翻回來
       back.map = back.map.clone(); this.disposables.push(back.map);
@@ -679,10 +705,6 @@ export class View3D {
     const m1 = new THREE.Mesh(g, front), m2 = new THREE.Mesh(g, back);
     m1.castShadow = true; m1.receiveShadow = m2.receiveShadow = true;
     grp.add(m1, m2);
-    const right = { x: W.n.y, y: -W.n.x };
-    const c = V.add(W.a, V.scale(W.u, it.off));
-    grp.position.set(c.x * M, it.elev * M, c.y * M);
-    grp.rotation.y = Math.atan2(-right.y, right.x);
     return grp;
   }
 

@@ -1,8 +1,8 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.11.0';
-import { uid } from './util.js?v=0.11.0';
-import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.11.0';
-import { faceTexIds } from './faces.js?v=0.11.0';
+import { db } from './db.js?v=0.12.0';
+import { uid } from './util.js?v=0.12.0';
+import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.12.0';
+import { faceTexIds } from './faces.js?v=0.12.0';
 
 export const S = {
   library: [],
@@ -24,6 +24,7 @@ export const isModel = li => !!li && li.shape === 'model'; // 特製模型（目
 export const isRound = li => !!li && (li.shape === 'cyl' || li.shape === 'rugRound' || li.shape === 'model');
 export const isWall = li => !!li && (li.shape === 'wall' || li.shape === 'cloth'); // 牆面物件：畫、海報、鏡子、垂墜的布
 export const isCloth = li => !!li && li.shape === 'cloth'; // 布：用釘子固定，模擬自然下垂
+export const isThrow = li => !!li && li.shape === 'throw'; // 披蓋的布：桌巾、床罩，落在底下的傢俱上
 // 圓角（mm）：R＝俯視圓角、r＝邊緣圓角（only 方塊傢俱；矩形地毯只有 R），超過尺寸就夾到最大
 export const radii = li => {
   if (!li || !(li.shape === 'box' || li.shape === 'rug')) return { R: 0, r: 0, both: false };

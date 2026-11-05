@@ -1,10 +1,11 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { clothOf } from './cloth.js?v=0.11.0';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.11.0';
-import { resolveFace } from './faces.js?v=0.11.0';
-import { Elev } from './elev.js?v=0.11.0';
-import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.11.0';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.11.0';
+import { clothOf, throwOf, setLazy } from './cloth.js?v=0.12.0';
+import { drawClothMesh } from './clothdraw.js?v=0.12.0';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.12.0';
+import { resolveFace } from './faces.js?v=0.12.0';
+import { Elev } from './elev.js?v=0.12.0';
+import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.12.0';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.12.0';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -18,7 +19,7 @@ let forsa = null, forsaLoading = false;
 function needForsa() {
   if (forsa || forsaLoading) return;
   forsaLoading = true;
-  import('./forsa.js?v=0.11.0').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
+  import('./forsa.js?v=0.12.0').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
 }
 
 export class Plan2D {
@@ -158,6 +159,8 @@ export class Plan2D {
   // ---------- 繪製 ----------
   draw() {
     if (!this.active || !this.w) return;
+    // 拖曳中先沿用布上一次的形狀（模擬要一點時間），放手後才重新算
+    setLazy(!!(this.drag?.moved || (this.ev?.drag?.moved && this.ev.drag.type === 'obj')));
     const ctx = this.ctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.fillStyle = C.bg;
@@ -209,7 +212,8 @@ export class Plan2D {
     const selRug = sel && isRug(lib(sel.libId));
     for (const it of items) if (isRug(lib(it.libId))) this.drawItem(ctx, it, 1);
     if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D);
-    for (const it of items) if (!isRug(lib(it.libId)) && !isModel(lib(it.libId))) this.drawItem(ctx, it, selRug ? 0.4 : 1);
+    for (const it of items) if (!isRug(lib(it.libId)) && !isModel(lib(it.libId)) && !isThrow(lib(it.libId))) this.drawItem(ctx, it, selRug ? 0.4 : 1);
+    for (const it of items) if (isThrow(lib(it.libId))) this.drawItem(ctx, it, selRug ? 0.4 : 1); // 桌巾蓋在傢俱上面
     for (const it of items) if (isModel(lib(it.libId))) this.drawItem(ctx, it, 1); // 檯燈畫在傢俱上面
     if (this.sun && this.sun.alt > 0) this.drawSunPatches(ctx, D, true); // 傢俱上再描一次外框，看得出被蓋住的範圍
     // 門框、門片與開門範圍畫在物件上面，才看得出會不會撞到
@@ -457,6 +461,16 @@ export class Plan2D {
   drawItem(ctx, it, alpha) {
     const li = lib(it.libId);
     if (isModel(li)) return this.drawModel(ctx, it, li, alpha);
+    if (isThrow(li)) {
+      const res = this.throwRes(it, li), pos = res.pos;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(it.x, it.y);
+      ctx.rotate((it.rot * Math.PI) / 180);
+      drawClothMesh(ctx, res, li, it.showBack, k => ({ x: pos[k * 3], y: pos[k * 3 + 2] }), 1, 1 / this.scale);
+      ctx.restore();
+      return;
+    }
     const w = li.w, d = li.d, rug = isRug(li);
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -688,15 +702,18 @@ export class Plan2D {
     const h = this.toS(this.rotHandle(it));
     return Math.hypot(pos.x - h.x, pos.y - h.y) < (touch ? 22 : 13);
   }
+  throwRes(it, li) { return throwOf(it, li, L().items, lib, this.D?.walls || []); }
   inside(it, w, pad) {
     const li = lib(it.libId);
     const l = V.rot(V.sub(w, it), (-it.rot * Math.PI) / 180);
+    if (isThrow(li)) { const b = this.throwRes(it, li).box; return l.x >= b.x0 - pad && l.x <= b.x1 + pad && l.y >= b.z0 - pad && l.y <= b.z1 + pad; }
     const a = li.w / 2 + pad, b = li.d / 2 + pad;
     return isRound(li) ? (l.x / a) ** 2 + (l.y / b) ** 2 <= 1 : Math.abs(l.x) <= a && Math.abs(l.y) <= b;
   }
   hitItem(w, pad) {
+    const rank = li => (isModel(li) ? 2 : isThrow(li) ? 1 : 0);
     const items = L().items.filter(it => lib(it.libId) && !isWall(lib(it.libId)));
-    const furn = items.filter(it => !isRug(lib(it.libId))).reverse().sort((a, b) => isModel(lib(b.libId)) - isModel(lib(a.libId))); // 檯燈優先被點到
+    const furn = items.filter(it => !isRug(lib(it.libId))).reverse().sort((a, b) => rank(lib(b.libId)) - rank(lib(a.libId))); // 檯燈、桌巾優先被點到（它們在傢俱上面）
     const rugs = items.filter(it => isRug(lib(it.libId))).reverse();
     return furn.find(it => this.inside(it, w, pad)) || rugs.find(it => this.inside(it, w, pad)) || null;
   }

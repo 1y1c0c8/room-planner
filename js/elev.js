@@ -1,9 +1,10 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
-import { S, P, L, lib, isRug, isWall, isCloth, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.11.0';
-import { clothOf, clothEnv, drape, pinsOf, limitPin } from './cloth.js?v=0.11.0';
-import { resolveFace, faceToward } from './faces.js?v=0.11.0';
-import { V, segDist, cm, clamp } from './util.js?v=0.11.0';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.11.0';
+import { S, P, L, lib, isRug, isWall, isCloth, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.12.0';
+import { clothOf, clothEnv, drape, pinsOf, limitPin } from './cloth.js?v=0.12.0';
+import { drawClothMesh } from './clothdraw.js?v=0.12.0';
+import { resolveFace, faceToward } from './faces.js?v=0.12.0';
+import { V, segDist, cm, clamp } from './util.js?v=0.12.0';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.12.0';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
@@ -75,7 +76,7 @@ export class Elev {
     const furn = [];
     for (const it of lay.items) {
       const li = lib(it.libId);
-      if (!li || isRug(li) || isWall(li) || li.shape === 'model') continue; // 檯燈不畫側影
+      if (!li || isRug(li) || isWall(li) || li.shape === 'model' || li.shape === 'throw') continue; // 檯燈、桌巾不畫側影
       const cs = itemCorners(it, li);
       const ts = cs.map(c => V.dot(V.sub(c, W.a), W.u)), ds = cs.map(c => V.dot(V.sub(c, W.a), W.n));
       const dmin = Math.min(...ds);
@@ -317,73 +318,10 @@ export class Elev {
     for (const r of this.snapHits) this.seg(ctx, r.a, r.b, C.hot, 3);
   }
 
-  // 布：把模擬出來的網格投影到牆面，逐個三角形貼圖（遠的先畫），依皺褶角度加陰影
+  // 布：把模擬出來的網格投影到牆面（正對牆看，z 越大越靠近你）
   drawCloth(ctx, o) {
-    const { nx, ny, pos } = o.cloth, li = o.li, it = o.ref;
-    const scr = new Array(nx * ny);
-    for (let k = 0; k < nx * ny; k++) scr[k] = this.toS({ x: o.ax + pos[k * 3], y: it.elev + pos[k * 3 + 1] });
-    const sides = [resolveFace(li, it.showBack ? 'back' : 'front'), resolveFace(li, it.showBack ? 'front' : 'back')].map(fc => {
-      const img = fc.tex ? getImg(fc.tex) : null;
-      return { fc, img: img ? smallImg(img) : null, pat: null };
-    });
-    const tris = [];
-    const P3 = k => [pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]];
-    const L = [-0.35, 0.55, 0.76];
-    for (let j = 0; j + 1 < ny; j++) for (let i = 0; i + 1 < nx; i++) {
-      const a = j * nx + i, b = a + nx, c = a + 1, d = b + 1;
-      for (const t of [[a, b, c], [c, b, d]]) {
-        const [p0, p1, p2] = t.map(P3);
-        const e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-        const nn = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-        const nl = Math.hypot(...nn) || 1, facing = nn[2] >= 0;
-        const lit = Math.abs((nn[0] * L[0] + nn[1] * L[1] + nn[2] * L[2]) / nl);
-        tris.push({ t, z: p0[2] + p1[2] + p2[2], side: facing ? 0 : 1, shade: Math.min(1, 0.45 + (0.55 * lit) / 0.76) });
-      }
-    }
-    tris.sort((x, y) => x.z - y.z);
-    const base = ctx.getTransform();
-    for (const { t, side, shade } of tris) {
-      const S3 = t.map(k => scr[k]);
-      const cx = (S3[0].x + S3[1].x + S3[2].x) / 3, cy = (S3[0].y + S3[1].y + S3[2].y) / 3;
-      ctx.beginPath();
-      S3.forEach((q, m) => { const dx = q.x - cx, dy = q.y - cy, l = Math.hypot(dx, dy) || 1, g = 0.8 / l; (m ? ctx.lineTo : ctx.moveTo).call(ctx, q.x + dx * g, q.y + dy * g); });
-      ctx.closePath();
-      const sd = sides[side], fc = sd.fc;
-      if (sd.img) {
-        // 貼圖座標：照片＝像素；材質重複＝以框選區域為一格
-        const iw = sd.img.width, ih = sd.img.height, flip = !!fc.flip !== (side === 1);
-        const UV = t.map(k => {
-          const i = k % nx, j = (k - i) / nx;
-          let u = i / (nx - 1); const v = j / (ny - 1);
-          if (flip) u = 1 - u;
-          return fc.kind === 'tile' ? [(u * li.w / fc.tileW) * iw, (v * li.h / fc.tileH) * ih] : [u * iw, v * ih];
-        });
-        const m = affine(UV, S3);
-        if (m) {
-          ctx.save(); ctx.clip();
-          ctx.setTransform(base.multiply(m));
-          if (fc.kind === 'tile') {
-            sd.pat ||= ctx.createPattern(sd.img, 'repeat');
-            const us = UV.map(q => q[0]), vs = UV.map(q => q[1]);
-            const x0 = Math.min(...us) - 2, y0 = Math.min(...vs) - 2;
-            ctx.fillStyle = sd.pat; ctx.fillRect(x0, y0, Math.max(...us) - x0 + 4, Math.max(...vs) - y0 + 4);
-          } else ctx.drawImage(sd.img, 0, 0);
-          ctx.restore();
-        } else { ctx.fillStyle = li.color; ctx.fill(); }
-      } else { ctx.fillStyle = fc.kind === 'color' ? fc.color : li.color; ctx.fill(); }
-      const dk = (1 - shade) * 0.55 + (side ? 0.08 : 0);
-      if (dk > 0.01) { ctx.fillStyle = `rgba(30,22,14,${dk.toFixed(3)})`; ctx.fill(); }
-    }
-    // 外輪廓（布邊）
-    ctx.beginPath();
-    const edge = [];
-    for (let i = 0; i < nx; i++) edge.push(i);
-    for (let j = 1; j < ny; j++) edge.push(j * nx + nx - 1);
-    for (let i = nx - 2; i >= 0; i--) edge.push((ny - 1) * nx + i);
-    for (let j = ny - 2; j > 0; j--) edge.push(j * nx);
-    edge.forEach((k, m) => (m ? ctx.lineTo(scr[k].x, scr[k].y) : ctx.moveTo(scr[k].x, scr[k].y)));
-    ctx.closePath();
-    ctx.strokeStyle = 'rgba(40,30,20,.45)'; ctx.lineWidth = 1; ctx.stroke();
+    const { pos } = o.cloth, it = o.ref;
+    drawClothMesh(ctx, o.cloth, o.li, it.showBack, k => this.toS({ x: o.ax + pos[k * 3], y: it.elev + pos[k * 3 + 1] }), 2, 1);
   }
   pinScreen(o) { return pinsOf(o.ref, o.li).map(p => this.toS({ x: o.ax + p.x, y: o.ref.elev + p.y })); }
   drawPins(ctx, o, big) {
@@ -649,28 +587,4 @@ export class Elev {
     });
     this.p2.draw();
   }
-}
-
-// 貼圖用的縮小版照片（立面圖逐個三角形畫，原圖太大會慢）
-const smallCache = new WeakMap();
-function smallImg(img) {
-  let c = smallCache.get(img);
-  if (c) return c;
-  const k = Math.min(1, 512 / Math.max(img.naturalWidth, img.naturalHeight));
-  c = document.createElement('canvas');
-  c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
-  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  smallCache.set(img, c);
-  return c;
-}
-// 把貼圖座標的三角形對到螢幕上的三角形（仿射）
-function affine(U, S3) {
-  const [[u0, v0], [u1, v1], [u2, v2]] = U, [p0, p1, p2] = S3;
-  const den = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
-  if (Math.abs(den) < 1e-9) return null;
-  const a = ((p1.x - p0.x) * (v2 - v0) - (p2.x - p0.x) * (v1 - v0)) / den;
-  const c = ((p2.x - p0.x) * (u1 - u0) - (p1.x - p0.x) * (u2 - u0)) / den;
-  const b = ((p1.y - p0.y) * (v2 - v0) - (p2.y - p0.y) * (v1 - v0)) / den;
-  const d = ((p2.y - p0.y) * (u1 - u0) - (p1.y - p0.y) * (u2 - u0)) / den;
-  return new DOMMatrix([a, b, c, d, p0.x - a * u0 - c * v0, p0.y - b * u0 - d * v0]);
 }

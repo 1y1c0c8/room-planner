@@ -1,24 +1,24 @@
 // 介面：側欄（物品庫/房間/擺法）、檢視器、距離輸入、各種對話框
 import {
-  S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, isCloth, selItem, checkpoint, changed, undo, redo, histState,
+  S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.11.0';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.11.0';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.11.0';
-import { Plan2D } from './plan2d.js?v=0.11.0';
-import { rectify } from './rectify.js?v=0.11.0';
-import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.11.0';
-import { DRAPES, clothOf, pinsOf, pointAt, limitPin } from './cloth.js?v=0.11.0';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.11.0';
+} from './state.js?v=0.12.0';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.12.0';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.12.0';
+import { Plan2D } from './plan2d.js?v=0.12.0';
+import { rectify } from './rectify.js?v=0.12.0';
+import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.12.0';
+import { DRAPES, clothOf, pinsOf, pointAt, limitPin } from './cloth.js?v=0.12.0';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.12.0';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
-const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）', wall: '牆面物件（畫、海報、鏡子）', cloth: '布（垂墜：掛毯、布簾、圍巾）', model: '特製模型（FORSÅ 工作燈）' };
+const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形）', rugRound: '地毯（圓／橢圓）', wall: '牆面物件（畫、海報、鏡子）', cloth: '布（垂墜：掛毯、布簾、圍巾）', throw: '布（披蓋：桌巾、床罩）', model: '特製模型（FORSÅ 工作燈）' };
 // 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
 const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
 let forsaMod = null;
-const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.11.0'));
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.12.0'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => [['clear', '透明'], ['frosted', '霧面（壓花）'], ['mirror', '反光（單向鏡）']]
@@ -289,6 +289,18 @@ function renderArtInspector(box, it, li) {
   };
 }
 
+// 桌巾：哪一面朝上、底下是哪件傢俱（可以直接選它，或把布對齊它的中心）
+function throwBlock(it, li) {
+  const u = supportOf(L(), it, lib);
+  return `<div class="form">
+      <div class="mute small">${(DRAPES[li.drape] || DRAPES.normal)[0]}・攤平 ${cm(li.w)} × ${cm(li.d)} cm</div>
+      <label>朝上的面<select data-k="showBack"><option value="">正面</option><option value="1" ${it.showBack ? 'selected' : ''}>背面（翻過來鋪）</option></select></label>
+      ${u ? `<div class="mute small">蓋在「${esc(u.name)}」上</div>
+        <div class="btns"><button data-a="center">對齊「${esc(u.name)}」中心</button><button data-a="under">選取「${esc(u.name)}」</button></div>`
+        : '<div class="mute small">底下沒有傢俱：布會平鋪在地上。把它拖到桌子或床上。</div>'}
+    </div>`;
+}
+
 // 布：掛在哪面牆、哪一面朝外、釘子（固定點）
 function renderClothInspector(box, it, li) {
   const walls = wallsNow(), W = walls[it.wall];
@@ -406,13 +418,16 @@ function renderInspector() {
       <button class="ghost x" data-a="close" title="取消選取">✕</button></div>
     <div class="row"><label>旋轉</label><input data-k="rot" type="number" inputmode="decimal" step="1" value="${+it.rot.toFixed(1)}"><span>°</span>
       <button data-a="ccw" title="逆時針 90°">⟲</button><button data-a="cw" title="順時針 90°">⟳</button></div>
+    ${isThrow(li) ? throwBlock(it, li) : ''}
     <div class="btns">
       <button data-a="lock" class="${it.locked ? 'on' : ''}">${it.locked ? '🔒 已鎖定' : '🔓 鎖定'}</button>
       <button data-a="dup">複製</button>
       <button data-a="edit">編輯物品</button>
       <button data-a="del" class="danger">移出</button>
     </div>
-    <p class="tip">${it.locked ? '鎖定中：不會被拖動，但仍可當作其他物件的距離基準。' : '點物件的任一條<b>邊</b>，再點另一條邊（牆、門框、其他物件），就能輸入精確距離。'}</p>`;
+    <p class="tip">${isThrow(li) ? '布攤平後從上方放下，落在底下的傢俱上。拖動或旋轉時先顯示原本的形狀，放手後重新垂下。' : it.locked ? '鎖定中：不會被拖動，但仍可當作其他物件的距離基準。' : '點物件的任一條<b>邊</b>，再點另一條邊（牆、門框、其他物件），就能輸入精確距離。'}</p>`;
+  const sb = box.querySelector('[data-k="showBack"]');
+  if (sb) sb.onchange = e => { checkpoint(); if (e.target.value) it.showBack = true; else delete it.showBack; changed(); };
   box.querySelector('[data-k="rot"]').onchange = e => {
     const v = parseFloat(e.target.value);
     if (!Number.isFinite(v)) return;
@@ -427,6 +442,15 @@ function renderInspector() {
     if (a === 'edit') { openLibForm(lib(cur.libId)); return; }
     if ((a === 'cw' || a === 'ccw') && cur.locked) { toast('已鎖定，先解鎖才能旋轉'); return; }
     checkpoint();
+    if (a === 'under' || a === 'center') {
+      const u = supportOf(L(), cur, lib), o = u && L().items.find(x => x.id === u.id);
+      if (!o) return;
+      if (a === 'under') { S.sel = o.id; emit('selection'); plan.draw(); return; }
+      if (cur.locked) { toast('已鎖定，先解鎖才能移動'); return; }
+      checkpoint(); cur.x = o.x; cur.y = o.y; cur.rot = o.rot; changed(); emit('selection');
+      toast(`已對齊「${u.name}」的中心和方向`);
+      return;
+    }
     if (a === 'cw') cur.rot = normDeg(cur.rot + 90);
     if (a === 'ccw') cur.rot = normDeg(cur.rot - 90);
     if (a === 'lock') cur.locked = !cur.locked;
@@ -475,7 +499,7 @@ function hideDistance() { const b = $('#distSheet'); b.hidden = true; b.innerHTM
 
 // ---------- 物品庫 ----------
 function thumbHTML(li) {
-  const fc = resolveFace(li, isWall(li) ? 'front' : 'top');
+  const fc = resolveFace(li, isWall(li) || isThrow(li) ? 'front' : 'top');
   const img = fc.tex ? getImg(fc.tex) : null;
   const shape = isRound(li) ? 'round' : '';
   return img
@@ -506,7 +530,7 @@ function renderLib() {
         ${thumbHTML(li)}
         <div class="lc-main"><b>${esc(li.name)}</b>
           <div class="mute small">${isWall(li) ? `${cm(li.w)} × ${cm(li.h)} cm・厚 ${cm(li.d)}` : `${cm(li.w)} × ${cm(li.d)} × ${cm(li.h)} cm`}</div>
-          <div class="tags">${isRug(li) ? '<span class="tag">地毯</span>' : ''}${isCloth(li) ? '<span class="tag">布</span>' : isWall(li) ? '<span class="tag">牆面</span>' : ''}${(li.tags || []).map(t => `<button class="tag ${libFilter.has(t) ? 'on' : ''}" data-a="tag" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}${n ? `<span class="tag on">此方案 ×${n}</span>` : ''}</div>
+          <div class="tags">${isRug(li) ? '<span class="tag">地毯</span>' : ''}${isCloth(li) || isThrow(li) ? '<span class="tag">布</span>' : isWall(li) ? '<span class="tag">牆面</span>' : ''}${(li.tags || []).map(t => `<button class="tag ${libFilter.has(t) ? 'on' : ''}" data-a="tag" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}${n ? `<span class="tag on">此方案 ×${n}</span>` : ''}</div>
         </div>
         <div class="lc-act"><button data-a="place" class="primary">放入</button><button data-a="edit">編輯</button></div>
       </div>`;
@@ -543,15 +567,19 @@ function placeItem(li) {
   const xs = poly.map(q => q.x), ys = poly.map(q => q.y);
   let x = Math.round((Math.min(...xs) + Math.max(...xs)) / 20) * 10, y = Math.round((Math.min(...ys) + Math.max(...ys)) / 20) * 10;
   while (lay.items.some(i => Math.abs(i.x - x) < 1 && Math.abs(i.y - y) < 1)) { x += 150; y += 150; }
+  // 桌巾：有選取傢俱就直接鋪在它上面
+  const under = isThrow(li) ? selItem() : null, ul = under && lib(under.libId);
+  const onto = ul && !isWall(ul) && !isRug(ul) && !isModel(ul) && !isThrow(ul) ? under : null;
+  if (onto) { x = onto.x; y = onto.y; }
   checkpoint();
-  const it = { id: uid(), libId: li.id, x, y, rot: 0, locked: false };
+  const it = { id: uid(), libId: li.id, x, y, rot: onto ? onto.rot : 0, locked: false };
   if (isModel(li)) { it.pose = {}; it.light = true; }
   lay.items.push(it);
   S.sel = it.id;
   changed(); emit('selection');
   if (isMobile()) closeSheet();
   if (view !== '2d') setView('2d');
-  toast(`已放入「${li.name}」，拖曳它或點它的邊來定位`);
+  toast(isThrow(li) ? (onto ? `已鋪在「${ul.name}」上` : `已放入「${li.name}」：拖到桌子或床上，它會自己垂下來（先選傢俱再按放入，會直接鋪上去）`) : `已放入「${li.name}」，拖曳它或點它的邊來定位`);
 }
 
 function openLibForm(src) {
@@ -655,7 +683,7 @@ function openLibForm(src) {
       ${body}
       <div class="btns">
         ${li.shape === 'box' && side ? '<button type="button" data-fq="sides">其他側面＝這一面</button>' : ''}
-        ${(li.shape === 'box' || li.shape === 'cloth') && (fsel === 'front' || fsel === 'back') ? '<button type="button" data-fq="backmirror">後面＝前面左右反轉</button>' : ''}
+        ${['box', 'cloth', 'throw'].includes(li.shape) && (fsel === 'front' || fsel === 'back') ? '<button type="button" data-fq="backmirror">後面＝前面左右反轉</button>' : ''}
         ${wall ? '<button type="button" data-fq="edges">四邊都延伸正面照片</button>' : ''}
         <button type="button" data-fq="clear" class="danger">清除這面</button>
       </div></div>`;
@@ -722,14 +750,15 @@ function openLibForm(src) {
     q('[data-modelbox]').hidden = shape !== 'model';
     q('[data-normal]').hidden = shape === 'model';
     if (shape === 'model' && !q('[data-f="name"]').value.trim()) q('[data-f="name"]').value = 'FORSÅ 工作燈';
-    const cloth = shape === 'cloth', wall = shape === 'wall' || cloth;
-    q('[data-clothbox]').hidden = !cloth;
-    q('[data-lh]').textContent = cloth ? '長' : '高';
+    const cloth = shape === 'cloth', thr = shape === 'throw', wall = shape === 'wall' || cloth;
+    q('[data-clothbox]').hidden = !(cloth || thr);
+    q('[data-lh]').textContent = cloth ? '長' : thr ? '厚度' : '高';
     q('[data-roundbox]').hidden = q('[data-roundhint]').hidden = !(shape === 'box' || shape === 'rug');
     el.querySelectorAll('[data-rebox]').forEach(x => { x.hidden = shape !== 'box'; });
     q('[data-lw]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／寬' : '寬';
-    q('[data-ld]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／深' : wall ? '厚度' : '深';
-    q('[data-dimhint]').textContent = cloth ? '寬、長＝布攤平時的尺寸（長＝從上緣到下緣）；厚度＝布的厚度，一般 0.1–0.5 cm。放進空間後用釘子固定，它會自己垂下來。'
+    q('[data-ld]').textContent = shape === 'rugRound' || shape === 'cyl' ? '直徑／深' : thr ? '長' : wall ? '厚度' : '深';
+    q('[data-dimhint]').textContent = thr ? '寬、長＝布攤平時的尺寸（寬＝2D 平面圖上的左右）；厚度＝布的厚度，一般 0.1–0.5 cm。放到桌子、床上，它會自己垂下來。'
+      : cloth ? '寬、長＝布攤平時的尺寸（長＝從上緣到下緣）；厚度＝布的厚度，一般 0.1–0.5 cm。放進空間後用釘子固定，它會自己垂下來。'
       : wall ? '寬、高＝正面看過去的尺寸（含框）；厚度＝凸出牆面多少（有框的畫填框的厚度，海報約 0.5 cm）。'
       : isRug({ shape }) ? '地毯厚度一般 0.5–2 cm。寬＝俯視時左右、深＝上下，放進空間後可以旋轉。' : '寬＝俯視時左右、深＝前後。尺寸以你量的最大外框為準。';
     const fitBtn = el.querySelector('[data-texseg] [data-t="fit"]');
@@ -740,6 +769,7 @@ function openLibForm(src) {
     if (isRug({ shape: e.target.value }) && num(q('[data-f="h"]').value) > 50) q('[data-f="h"]').value = '1.0';
     if (e.target.value === 'wall' && num(q('[data-f="d"]').value) > 150) q('[data-f="d"]').value = '2.0';
     if (e.target.value === 'cloth' && num(q('[data-f="d"]').value) > 20) q('[data-f="d"]').value = '0.3';
+    if (e.target.value === 'throw' && num(q('[data-f="h"]').value) > 20) q('[data-f="h"]').value = '0.3';
     if (f.texMode !== 'none') renderTex();
     refreshFaces();
   };
@@ -751,7 +781,7 @@ function openLibForm(src) {
     if (f.texMode === 'none') { box.innerHTML = '<p class="mute small">只用底色。之後隨時可以加照片。</p>'; return; }
     const img = newURL || (f.tex ? getImg(f.tex)?.src : null);
     box.innerHTML = `
-      ${f.texMode === 'fit' && q('[data-f="shape"]').value === 'cloth'
+      ${f.texMode === 'fit' && ['cloth', 'throw'].includes(q('[data-f="shape"]').value)
         ? '<p class="mute small">把布攤平（地板或床上），站高一點正對著拍，整塊布都要入鏡。接著拖四個角對準布的四個角，貼圖會依你量的寬、長拉正。</p>'
         : f.texMode === 'fit' && q('[data-f="shape"]').value === 'wall'
         ? '<p class="mute small">正對著畫或海報拍（含框就把框一起拍進來），站遠一點、用長焦鏡頭最好。接著拖四個角對準外框，貼圖會依你量的寬高拉正。</p>'
@@ -804,7 +834,7 @@ function openLibForm(src) {
     }
     if (!(f.w > 0 && f.d > 0 && f.h > 0)) { toast('寬、深、高都要大於 0'); return; }
     if (f.shape !== 'model') f.color = q('[data-f="color"]').value;
-    if (f.shape === 'cloth') f.drape = q('[data-f="drape"]').value; else delete f.drape;
+    if (f.shape === 'cloth' || f.shape === 'throw') f.drape = q('[data-f="drape"]').value; else delete f.drape;
     f.rr = Math.max(0, num(q('[data-f="rr"]').value, 0)); f.re = Math.max(0, num(q('[data-f="re"]').value, 0)); f.reBoth = !!q('[data-f="reBoth"]').value;
     f.tags = q('[data-f="tags"]').value.split(/[,，、]/).map(s => s.trim()).filter(Boolean);
     f.notes = q('[data-f="notes"]').value;
@@ -1408,7 +1438,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.11.0・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.12.0・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1475,7 +1505,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.11.0');
+        const { View3D } = await import('./view3d.js?v=0.12.0');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), {
           onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
@@ -1615,7 +1645,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.12.0';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;
