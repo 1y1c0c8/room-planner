@@ -1,8 +1,8 @@
 // 在 2D 畫布上畫模擬出來的布：逐個三角形貼圖（遠的先畫），依皺褶角度加陰影
 // 立面圖（正對牆看，axis＝2）和平面圖（從上往下看，axis＝1）共用
-import { getImg } from './state.js?v=0.12.0';
-import { resolveFace, } from './faces.js?v=0.12.0';
-import { sheet } from './cloth.js?v=0.12.0';
+import { getImg } from './state.js?v=0.12.1';
+import { resolveFace, } from './faces.js?v=0.12.1';
+import { sheet } from './cloth.js?v=0.12.1';
 
 const LIGHT = { 2: [-0.35, 0.55, 0.76], 1: [-0.35, 0.8, -0.45] }; // 光從畫面左上方來
 
@@ -97,4 +97,29 @@ function affine(U, S3) {
   const b = ((p1.y - p0.y) * (v2 - v0) - (p2.y - p0.y) * (v1 - v0)) / den;
   const d = ((p2.y - p0.y) * (u1 - u0) - (p1.y - p0.y) * (u2 - u0)) / den;
   return new DOMMatrix([a, b, c, d, p0.x - a * u0 - c * v0, p0.y - b * u0 - d * v0]);
+}
+
+// 畫好的布存成一張圖（2D 座標：平面圖＝(x, z)，立面圖＝(x, -y)），拖曳、捲動時直接貼圖，不用每一格重畫
+// k＝每 mm 幾個畫布像素；縮放 0.8–1.25 倍內沿用同一張
+const bmpCache = new WeakMap();
+export function clothBitmap(res, li, showBack, axis, k) {
+  const tex = [resolveFace(li, 'front'), resolveFace(li, 'back')].map(fc => (fc.tex ? fc.tex + (getImg(fc.tex) ? '+' : '-') : fc.color || '')).join('|');
+  const sig = `${showBack ? 1 : 0}|${li.updated || 0}|${li.color}|${tex}`;
+  const old = bmpCache.get(res);
+  if (old && old.sig === sig && k / old.k > 0.8 && k / old.k < 1.25) return old;
+  const { box, pos } = res, pad = 6;
+  const x0 = box.x0 - pad, x1 = box.x1 + pad;
+  const [y0, y1] = axis === 1 ? [box.z0 - pad, box.z1 + pad] : [-box.y1 - pad, -box.y0 + pad];
+  let kk = k;
+  const maxPx = 2400;
+  if (Math.max(x1 - x0, y1 - y0) * kk > maxPx) kk = maxPx / Math.max(x1 - x0, y1 - y0);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.ceil((x1 - x0) * kk)); c.height = Math.max(1, Math.ceil((y1 - y0) * kk));
+  const g = c.getContext('2d');
+  g.setTransform(kk, 0, 0, kk, -x0 * kk, -y0 * kk);
+  const to = axis === 1 ? q => ({ x: pos[q * 3], y: pos[q * 3 + 2] }) : q => ({ x: pos[q * 3], y: -pos[q * 3 + 1] });
+  drawClothMesh(g, res, li, showBack, to, axis, 1 / kk);
+  const bmp = { canvas: c, x0, y0, w: x1 - x0, h: y1 - y0, k, sig };
+  bmpCache.set(res, bmp);
+  return bmp;
 }

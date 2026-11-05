@@ -3,14 +3,14 @@ import {
   S, on, emit, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, selItem, checkpoint, changed, undo, redo, histState,
   loadAll, flushSaves, newProject, newLayout, addProject, openProject, removeProject, saveProjectNow, pruneMeasures,
   saveLib, deleteLib, usage, putImage, delImage, getImg, saveSettings, exportData, importData,
-} from './state.js?v=0.12.0';
-import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.12.0';
-import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf } from './geom.js?v=0.12.0';
-import { Plan2D } from './plan2d.js?v=0.12.0';
-import { rectify } from './rectify.js?v=0.12.0';
-import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.12.0';
-import { DRAPES, clothOf, pinsOf, pointAt, limitPin } from './cloth.js?v=0.12.0';
-import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.12.0';
+} from './state.js?v=0.12.1';
+import { uid, cm, toMM, esc, normDeg } from './util.js?v=0.12.1';
+import { buildRoom, wallEdges, cornerName, isInterior, nm, doorFrame, doorAngle, doorLeafH, supportOf, itemCorners } from './geom.js?v=0.12.1';
+import { Plan2D } from './plan2d.js?v=0.12.1';
+import { rectify } from './rectify.js?v=0.12.1';
+import { FACE_SETS, faceSet, faceName, faceDims, faceOrient, resolveFace, faceTexIds } from './faces.js?v=0.12.1';
+import { DRAPES, clothOf, pinsOf, pointAt, limitPin, throwUnder, onClothReady } from './cloth.js?v=0.12.1';
+import { sunPos, localDate, dayInfo, doyOf, mdOf, hm, bearingName, sunDir2 } from './sun.js?v=0.12.1';
 
 const $ = s => document.querySelector(s);
 const isMobile = () => matchMedia('(max-width: 760px)').matches;
@@ -18,7 +18,7 @@ const SHAPES = { box: '方塊傢俱', cyl: '圓形傢俱', rug: '地毯（矩形
 // 特製模型的配色（與 forsa.js 一致；這裡只放名稱與色票，避免一開頁面就載入 3D 函式庫）
 const MODEL_PALETTES = { mine: ['我的燈（黑・舊）', '#0b0b0c'], black: ['黑色', '#151516'], white: ['白色', '#efeee9'], nickel: ['鍍鎳', '#cfd0cd'], brass: ['黃銅色', '#c6a468'], turquoise: ['土耳其藍', '#2f9e9a'] };
 let forsaMod = null;
-const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.12.0'));
+const loadForsa = async () => (forsaMod ||= await import('./forsa.js?v=0.12.1'));
 const selBox = () => { const p = P(); return p && S.sel ? (p.room.boxes || []).find(b => b.id === S.sel) || null : null; };
 const hostOpts = (r, w) => `<option value="" ${!w.host ? 'selected' : ''}>牆面</option>` + (r.boxes || []).map((b, j) => `<option value="${b.id}" ${w.host === b.id ? 'selected' : ''}>${esc(nm(b, `量體 ${j + 1}`))} 正面（牆 ${b.wall + 1}）</option>`).join('');
 const glassOpts = w => [['clear', '透明'], ['frosted', '霧面（壓花）'], ['mirror', '反光（單向鏡）']]
@@ -290,13 +290,15 @@ function renderArtInspector(box, it, li) {
 }
 
 // 桌巾：哪一面朝上、底下是哪件傢俱（可以直接選它，或把布對齊它的中心）
+// 布底下碰到的傢俱（可以好幾件：兩張併在一起的桌子、床＋床頭櫃）
+const underOf = it => throwUnder(it, lib(it.libId), L().items, lib, wallsNow()).map(id => L().items.find(x => x.id === id)).filter(Boolean);
 function throwBlock(it, li) {
-  const u = supportOf(L(), it, lib);
+  const us = underOf(it), names = us.map(o => `「${esc(lib(o.libId).name)}」`);
   return `<div class="form">
       <div class="mute small">${(DRAPES[li.drape] || DRAPES.normal)[0]}・攤平 ${cm(li.w)} × ${cm(li.d)} cm</div>
       <label>朝上的面<select data-k="showBack"><option value="">正面</option><option value="1" ${it.showBack ? 'selected' : ''}>背面（翻過來鋪）</option></select></label>
-      ${u ? `<div class="mute small">蓋在「${esc(u.name)}」上</div>
-        <div class="btns"><button data-a="center">對齊「${esc(u.name)}」中心</button><button data-a="under">選取「${esc(u.name)}」</button></div>`
+      ${us.length ? `<div class="mute small">蓋在 ${names.join('、')} 上（布碰到的傢俱都會撐住它，不用另外設定）</div>
+        <div class="btns"><button data-a="center">對齊${us.length > 1 ? '它們的整體' : names[0]}中心</button>${us.map((o, i) => `<button data-a="under" data-id="${o.id}">選取${names[i]}</button>`).join('')}</div>`
         : '<div class="mute small">底下沒有傢俱：布會平鋪在地上。把它拖到桌子或床上。</div>'}
     </div>`;
 }
@@ -443,12 +445,17 @@ function renderInspector() {
     if ((a === 'cw' || a === 'ccw') && cur.locked) { toast('已鎖定，先解鎖才能旋轉'); return; }
     checkpoint();
     if (a === 'under' || a === 'center') {
-      const u = supportOf(L(), cur, lib), o = u && L().items.find(x => x.id === u.id);
-      if (!o) return;
-      if (a === 'under') { S.sel = o.id; emit('selection'); plan.draw(); return; }
+      const us = underOf(cur);
+      if (!us.length) return;
+      if (a === 'under') { S.sel = e.target.closest('button').dataset.id; emit('selection'); plan.draw(); return; }
       if (cur.locked) { toast('已鎖定，先解鎖才能移動'); return; }
-      checkpoint(); cur.x = o.x; cur.y = o.y; cur.rot = o.rot; changed(); emit('selection');
-      toast(`已對齊「${u.name}」的中心和方向`);
+      // 好幾件：取它們合起來的外框中心，方向跟最大的那件
+      const big = us.reduce((m, o) => (lib(o.libId).w * lib(o.libId).d > lib(m.libId).w * lib(m.libId).d ? o : m));
+      const r = (big.rot * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
+      const pts = us.flatMap(o => itemCorners(o, lib(o.libId))).map(p => ({ u: p.x * c + p.y * s, v: -p.x * s + p.y * c }));
+      const cu = (Math.min(...pts.map(p => p.u)) + Math.max(...pts.map(p => p.u))) / 2, cv = (Math.min(...pts.map(p => p.v)) + Math.max(...pts.map(p => p.v))) / 2;
+      checkpoint(); cur.x = Math.round(cu * c - cv * s); cur.y = Math.round(cu * s + cv * c); cur.rot = big.rot; changed(); emit('selection');
+      toast(us.length > 1 ? `已對齊 ${us.length} 件傢俱的整體中心` : `已對齊「${lib(big.libId).name}」的中心和方向`);
       return;
     }
     if (a === 'cw') cur.rot = normDeg(cur.rot + 90);
@@ -1438,7 +1445,7 @@ function openMenu() {
       <li><b>快捷鍵</b>：⌘Z 復原、⇧⌘Z 重做、方向鍵移動 1 cm（Shift 0.1 cm）、R 旋轉 90°、L 鎖定、Delete 移出、Esc 取消。</li>
       <li><b>3D 走動</b>：WASD／方向鍵移動、拖曳轉頭、Shift 快走、R／F 升降視線；手機用左下搖桿。</li>
     </ul>
-    <p class="mute small">v0.12.0・資料不會上傳到任何伺服器。</p>`);
+    <p class="mute small">v0.12.1・資料不會上傳到任何伺服器。</p>`);
   const el = m.el;
   el.querySelector('[data-k="stature"]').onchange = async e => {
     const v = toMM(e.target.value);
@@ -1505,7 +1512,7 @@ async function setView(v) {
     if (!v3d) {
       $('#v3d').innerHTML = '<div class="loading">載入 3D…</div>';
       try {
-        const { View3D } = await import('./view3d.js?v=0.12.0');
+        const { View3D } = await import('./view3d.js?v=0.12.1');
         $('#v3d').innerHTML = '';
         v3d = new View3D($('#v3d'), {
           onEye: cmv => { $('#eye').value = cmv; $('#eyeVal').textContent = cmv + ' cm'; },
@@ -1623,6 +1630,7 @@ const ui = { toast, updateHint, showDistance, hideDistance, onViewChange, refres
   if (it && inp && document.activeElement !== inp) inp.value = +it.rot.toFixed(1);
 } };
 
+onClothReady(() => emit('cloth'));
 on(what => {
   if (what === 'switch') { plan.closeWall(); plan.needFit = true; plan.fit(); plan.pick = null; plan.mpick = null; hideDistance(); renderTitle(); }
   if (['project', 'library', 'images', 'switch', 'selection'].includes(what)) plan.draw();
@@ -1634,6 +1642,9 @@ on(what => {
   }
   if (what === 'library' || what === 'images') { renderLib(); renderInspector(); if (what === 'images') renderRoom(); }
   if (what === 'selection') renderInspector();
+  // 背景的布料模擬算好了：重畫；選到的是布就更新面板（例如「蓋在哪些傢俱上」）
+  if (what === 'cloth') { plan.draw(); const sl = selItem() && lib(selItem().libId); if ((isThrow(sl) || isCloth(sl)) && !document.activeElement?.closest?.('#inspector input')) renderInspector(); }
+  if (v3d && what === 'cloth') v3d.markDirty();
   if (what === 'projects') renderTitle();
   if (what === 'history') { const h = histState(); $('#btnUndo').disabled = !h.u; $('#btnRedo').disabled = !h.r; }
   if (v3d && ['project', 'library', 'images', 'switch', 'settings'].includes(what)) v3d.markDirty();
@@ -1645,7 +1656,7 @@ on(what => {
 
 // ---------- 啟動 ----------
 // ---------- 版本檢查 ----------
-const APP_VERSION = '0.12.0';
+const APP_VERSION = '0.12.1';
 let lastCheck = 0;
 async function checkUpdate() {
   if (Date.now() - lastCheck < 60000 || location.protocol === 'file:') return;

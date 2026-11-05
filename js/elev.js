@@ -1,10 +1,10 @@
 // 牆面立面圖：正對一面牆，擺放牆面物件（畫、海報）與窗戶，可用任意邊設定距離
-import { S, P, L, lib, isRug, isWall, isCloth, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.12.0';
-import { clothOf, clothEnv, drape, pinsOf, limitPin } from './cloth.js?v=0.12.0';
-import { drawClothMesh } from './clothdraw.js?v=0.12.0';
-import { resolveFace, faceToward } from './faces.js?v=0.12.0';
-import { V, segDist, cm, clamp } from './util.js?v=0.12.0';
-import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.12.0';
+import { S, P, L, lib, isRug, isWall, isCloth, getImg, checkpoint, changed, emit, radii } from './state.js?v=0.12.1';
+import { clothOf, clothEnv, drape, pinsOf, limitPin } from './cloth.js?v=0.12.1';
+import { clothBitmap } from './clothdraw.js?v=0.12.1';
+import { resolveFace, faceToward } from './faces.js?v=0.12.1';
+import { V, segDist, cm, clamp } from './util.js?v=0.12.1';
+import { buildRoom, wallEdges, itemCorners, isParallel, cornerName, WALL_T, nm, beamGeom, skirtSegs, doorFrame, doorLeafH } from './geom.js?v=0.12.1';
 
 const C = { accent: '#2f7d76', hot: '#d0612a', ink: '#2b2824', dim: '#2f7d76', dark: '#3b3631' };
 const NEAR = 800; // 離牆多近的傢俱要畫出側影（mm）
@@ -320,8 +320,12 @@ export class Elev {
 
   // 布：把模擬出來的網格投影到牆面（正對牆看，z 越大越靠近你）
   drawCloth(ctx, o) {
-    const { pos } = o.cloth, it = o.ref;
-    drawClothMesh(ctx, o.cloth, o.li, it.showBack, k => this.toS({ x: o.ax + pos[k * 3], y: it.elev + pos[k * 3 + 1] }), 2, 1);
+    const it = o.ref, bmp = clothBitmap(o.cloth, o.li, it.showBack, 2, this.scale * this.p2.dpr);
+    const c = this.toS({ x: o.ax, y: it.elev });
+    ctx.save();
+    ctx.translate(c.x, c.y); ctx.scale(this.scale, this.scale); // 布的座標 (x, -y)（mm）→ 螢幕
+    ctx.drawImage(bmp.canvas, bmp.x0, bmp.y0, bmp.w, bmp.h);
+    ctx.restore();
   }
   pinScreen(o) { return pinsOf(o.ref, o.li).map(p => this.toS({ x: o.ax + p.x, y: o.ref.elev + p.y })); }
   drawPins(ctx, o, big) {

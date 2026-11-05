@@ -4,7 +4,7 @@
 //    釘子 it.pins = [{ u, v, x, y }]：(u,v)＝布上的點（0–1，u 從左、v 從上緣量），(x,y)＝釘在牆上的位置（相對錨點）
 //  throw（披蓋：桌巾、床罩）：以平面圖上的中心（it.x, it.y）、地板為原點，跟著 it.rot 轉；x＝寬、z＝長（2D 往下）、y＝往上
 //    攤平從上方放下，落在底下的傢俱上
-import { V } from './util.js?v=0.12.0';
+import { V } from './util.js?v=0.12.1';
 
 export const DRAPES = {
   soft: ['柔軟（絲巾、薄紗）', 0.015, 0.25],
@@ -52,13 +52,13 @@ export function clothEnv(it, li, W, items, libFn) {
 export function throwEnv(it, li, items, libFn, walls) {
   const r = (it.rot * Math.PI) / 180, ex = { x: Math.cos(r), y: Math.sin(r) }, ez = { x: -Math.sin(r), y: Math.cos(r) };
   const reach = Math.hypot(li.w, li.d) / 2;
-  const boxes = [];
+  const boxes = [], ids = [];
   for (const o of items) {
     const ol = libFn(o.libId);
     if (!ol || o.id === it.id || SKIP.includes(ol.shape)) continue;
     const b = collider(o, ol, it, ex, ez, 0);
     if (Math.hypot(b[0], b[1]) > reach + Math.hypot(ol.w, ol.d) / 2) continue;
-    boxes.push(b);
+    boxes.push(b); ids.push(o.id);
   }
   const ws = [];
   for (const W of walls || []) {
@@ -67,7 +67,7 @@ export function throwEnv(it, li, items, libFn, walls) {
     if (s > reach + 50) continue;
     ws.push([V.dot(a, ex), V.dot(a, ez), V.dot(W.u, ex), V.dot(W.u, ez), V.dot(W.n, ex), V.dot(W.n, ez), W.len].map(v => Math.round(v * 1000) / 1000));
   }
-  return { floor: 0, boxes, wallPlane: false, walls: ws };
+  return { floor: 0, boxes, ids, wallPlane: false, walls: ws };
 }
 
 const cache = new Map();
@@ -75,27 +75,53 @@ const keyOf = (li, pins, env) => JSON.stringify([li.shape, li.w, li.h, li.d, li.
 
 // 主函式：回傳 { nx, ny, pos(Float32Array, nx*ny*3), box:{x0,x1,y0,y1,z0,z1}, tight, pinNodes }
 // warm：拖曳釘子時用上一次的結果當起點，跑少一點步數（即時預覽）
-// lazy：拖曳中（物件或旁邊的傢俱在動）先沿用這件布上一次的形狀，放手後才重新模擬
-const lastById = new Map();
+// 模擬放在背景執行緒（Web Worker）跑，不卡畫面：還沒算好之前先沿用這件布上一次的形狀，算好再通知重畫
+// lazy：拖曳中（物件或旁邊的傢俱在動）連背景模擬都先不排，放手後才算
+const lastById = new Map(), latestKey = new Map(), pendingKeys = new Set();
+let lazy = false, worker = null, onReady = null;
 export const setLazy = on => { lazy = !!on; };
-let lazy = false;
+export const onClothReady = f => { onReady = f; };
+const remember = (key, r) => { cache.set(key, r); if (cache.size > 40) cache.delete(cache.keys().next().value); };
+function getWorker() {
+  if (worker !== null) return worker;
+  worker = false;
+  if (typeof window === 'undefined' || typeof Worker === 'undefined') return worker;
+  try {
+    const w = new Worker(new URL('./clothworker.js?v=0.12.1', import.meta.url), { type: 'module' });
+    w.onmessage = e => {
+      const { key, id, r } = e.data;
+      pendingKeys.delete(key);
+      remember(key, r);
+      if (latestKey.get(id) === key) lastById.set(id, r);
+      onReady?.();
+    };
+    w.onerror = () => { worker = false; pendingKeys.clear(); onReady?.(); }; // 不支援就改回直接算
+    worker = w;
+  } catch { worker = false; }
+  return worker;
+}
 export function drape(li, it, env, warm = null) {
   const pins = pinsOf(it, li);
   const key = keyOf(li, pins, env);
-  if (!warm) {
-    const hit = cache.get(key);
-    if (hit) { cache.delete(key); cache.set(key, hit); lastById.set(it.id, hit); return hit; }
-    const old = lastById.get(it.id);
-    if (lazy && old) return old;
+  const fullEnv = { walls: [], ...env };
+  if (warm) { const r = simulate(li, pins, fullEnv, warm); lastById.set(it.id, r); return r; }
+  const hit = cache.get(key);
+  if (hit) { cache.delete(key); cache.set(key, hit); lastById.set(it.id, hit); return hit; }
+  const old = lastById.get(it.id);
+  if (lazy && old) return old;
+  const w = getWorker();
+  if (!w) { const r = simulate(li, pins, fullEnv, null); remember(key, r); lastById.set(it.id, r); return r; }
+  latestKey.set(it.id, key);
+  if (!pendingKeys.has(key)) {
+    pendingKeys.add(key);
+    w.postMessage({ key, id: it.id, li: { shape: li.shape, w: li.w, h: li.h, d: li.d, drape: li.drape }, pins, env: fullEnv });
   }
-  const r = simulate(li, pins, { walls: [], ...env }, warm);
-  if (!warm) {
-    cache.set(key, r);
-    if (cache.size > 40) cache.delete(cache.keys().next().value);
-  }
-  lastById.set(it.id, r);
-  return r;
+  if (old) return old;
+  const flat = simulate(li, pins, fullEnv, null, 0); // 第一次：先畫攤平的樣子
+  lastById.set(it.id, flat);
+  return flat;
 }
+export const simulateSync = (li, pins, env) => simulate(li, pins, env, null);
 
 function grid(w, len) {
   const sp = Math.min(Math.max(Math.max(w, len) / 26, 8), 80);
@@ -132,7 +158,7 @@ function pushOut(pos, p, b, gap) {
   return true;
 }
 
-function simulate(li, pins, env, warm) {
+function simulate(li, pins, env, warm, stepsOverride = null) {
   const thr = li.shape === 'throw';
   const { w, len: h, t } = sheet(li);
   const { nx, ny } = grid(w, h);
@@ -210,6 +236,7 @@ function simulate(li, pins, env, warm) {
   });
 
   const steps = warmOk ? 60 : thr ? 400 : 220, iters = warmOk ? 5 : thr ? 4 : 7, ramp = warmOk ? 1 : Math.round(steps * 0.4);
+  const steps2 = stepsOverride ?? steps;
   const dt = 1 / (thr ? 120 : 60), gStep = G * dt * dt, damp = 0.975;
 
   const collide = k => {
@@ -226,7 +253,7 @@ function simulate(li, pins, env, warm) {
   };
   const touched = new Uint8Array(n);
 
-  for (let s = 0; s < steps; s++) {
+  for (let s = 0; s < steps2; s++) {
     const tr = Math.min(1, (s + 1) / ramp);
     pinNodes.forEach((q, m) => {
       const p = q.k * 3, [x0, yy0, z0] = start[m];
@@ -292,7 +319,16 @@ function simulate(li, pins, env, warm) {
     const cloth = Math.hypot(flat(qa.k, 0) - flat(qb.k, 0), flat(qa.k, 1) - flat(qb.k, 1));
     if (Math.hypot(qa.tx - qb.tx, qa.ty - qb.ty) > cloth * 1.03 + 5) tight = true;
   }
-  return { nx, ny, pos, box: { x0, x1, y0: yy0, y1, z0, z1 }, tight, pinNodes: pinNodes.map(q => q.k) };
+  // 布實際碰到哪些傢俱（披蓋的布可以同時蓋在好幾件上）
+  const touch = [];
+  boxes.forEach((b, bi) => {
+    const tmp = new Float32Array(3);
+    for (let k = 0; k < n; k++) {
+      tmp[0] = pos[k * 3]; tmp[1] = pos[k * 3 + 1] - 3; tmp[2] = pos[k * 3 + 2];
+      if (pushOut(tmp, 0, b, gap + 3)) { touch.push(bi); break; }
+    }
+  });
+  return { nx, ny, pos, box: { x0, x1, y0: yy0, y1, z0, z1 }, tight, pinNodes: pinNodes.map(q => q.k), touch };
 }
 
 // 攤平的布（中心在原點）跟這件傢俱的俯視範圍有沒有重疊（用傢俱的四個角＋中心粗估）
@@ -314,6 +350,11 @@ export function pointAt(res, u, v) {
 // 方便各視圖呼叫：某一件布目前垂下來的樣子
 export const clothOf = (it, li, W, items, libFn) => drape(li, it, clothEnv(it, li, W, items, libFn));
 export const throwOf = (it, li, items, libFn, walls) => drape(li, it, throwEnv(it, li, items, libFn, walls));
+// 桌巾蓋在哪些傢俱上（id 陣列，依碰到的順序）
+export function throwUnder(it, li, items, libFn, walls) {
+  const env = throwEnv(it, li, items, libFn, walls), res = drape(li, it, env);
+  return (res.touch || []).map(i => env.ids[i]).filter(Boolean);
+}
 
 // 釘子不能釘得比布上的距離還開（布會被拉破）：把第 i 個釘子拉回到「剛好拉直」的位置
 export function limitPin(li, pins, i) {

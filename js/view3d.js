@@ -3,13 +3,13 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, getImg, radii } from './state.js?v=0.12.0';
-import { clothOf, throwOf } from './cloth.js?v=0.12.0';
-import { roundedBoxGeometry } from './rounded.js?v=0.12.0';
-import { resolveFace, faceDims } from './faces.js?v=0.12.0';
-import { createForsa, fullPose } from './forsa.js?v=0.12.0';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.12.0';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.12.0';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, getImg, radii } from './state.js?v=0.12.1';
+import { clothOf, throwOf, throwUnder } from './cloth.js?v=0.12.1';
+import { roundedBoxGeometry } from './rounded.js?v=0.12.1';
+import { resolveFace, faceDims } from './faces.js?v=0.12.1';
+import { createForsa, fullPose } from './forsa.js?v=0.12.1';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.12.1';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.12.1';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -412,8 +412,8 @@ export class View3D {
     for (const it of lay.items) {
       const li = lib(it.libId);
       if (!isThrow(li)) continue;
-      const u = supportOf(lay, it, lib);
-      if (u) covered.set(u.id, Math.max(covered.get(u.id) || 0, clamp(Math.max(li.w, li.d) / 26 * 0.4, 8, 25)));
+      const ins = clamp((Math.max(li.w, li.d) / 26) * 0.4, 8, 25);
+      for (const id of throwUnder(it, li, lay.items, lib, walls)) covered.set(id, Math.max(covered.get(id) || 0, ins));
     }
     for (const it of lay.items) {
       const li = lib(it.libId);

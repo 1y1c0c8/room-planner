@@ -1,11 +1,11 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { clothOf, throwOf, setLazy } from './cloth.js?v=0.12.0';
-import { drawClothMesh } from './clothdraw.js?v=0.12.0';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.12.0';
-import { resolveFace } from './faces.js?v=0.12.0';
-import { Elev } from './elev.js?v=0.12.0';
-import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.12.0';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.12.0';
+import { clothOf, throwOf, setLazy } from './cloth.js?v=0.12.1';
+import { clothBitmap } from './clothdraw.js?v=0.12.1';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, isThrow, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.12.1';
+import { resolveFace } from './faces.js?v=0.12.1';
+import { Elev } from './elev.js?v=0.12.1';
+import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.12.1';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.12.1';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -19,7 +19,7 @@ let forsa = null, forsaLoading = false;
 function needForsa() {
   if (forsa || forsaLoading) return;
   forsaLoading = true;
-  import('./forsa.js?v=0.12.0').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
+  import('./forsa.js?v=0.12.1').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
 }
 
 export class Plan2D {
@@ -462,12 +462,12 @@ export class Plan2D {
     const li = lib(it.libId);
     if (isModel(li)) return this.drawModel(ctx, it, li, alpha);
     if (isThrow(li)) {
-      const res = this.throwRes(it, li), pos = res.pos;
+      const bmp = clothBitmap(this.throwRes(it, li), li, it.showBack, 1, this.scale * this.dpr);
       ctx.save();
       ctx.globalAlpha = alpha;
       ctx.translate(it.x, it.y);
       ctx.rotate((it.rot * Math.PI) / 180);
-      drawClothMesh(ctx, res, li, it.showBack, k => ({ x: pos[k * 3], y: pos[k * 3 + 2] }), 1, 1 / this.scale);
+      ctx.drawImage(bmp.canvas, bmp.x0, bmp.y0, bmp.w, bmp.h);
       ctx.restore();
       return;
     }
