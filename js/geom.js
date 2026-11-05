@@ -1,5 +1,5 @@
 // 幾何：房間多邊形、牆、門、物件的邊，以及「可作為距離基準的邊」
-import { V, polyArea } from './util.js?v=0.10.3';
+import { V, polyArea } from './util.js?v=0.11.0';
 
 export const WALL_T = 100; // 2D 顯示用的牆厚（mm）
 
@@ -132,7 +132,7 @@ export function refEdges(p, lay, libFn, walls) {
   }));
   for (const it of lay.items) {
     const li = libFn(it.libId);
-    if (!li || li.shape === 'wall') continue;
+    if (!li || li.shape === 'wall' || li.shape === 'cloth') continue;
     for (const e of itemEdges(it, li)) out.push({
       ref: { k: 'item', id: it.id, e: e.i }, kind: 'item', owner: it.id,
       a: e.a, b: e.b, u: e.u, n: e.n, len: e.len, mid: e.mid, label: li.name,
@@ -210,7 +210,7 @@ export function supportOf(lay, it, libFn) {
   for (const o of lay.items) {
     if (o.id === it.id) continue;
     const li = libFn(o.libId);
-    if (!li || li.shape === 'wall' || li.shape === 'rug' || li.shape === 'rugRound' || li.shape === 'model') continue;
+    if (!li || li.shape === 'wall' || li.shape === 'cloth' || li.shape === 'rug' || li.shape === 'rugRound' || li.shape === 'model') continue;
     const l = V.rot(V.sub(it, o), (-o.rot * Math.PI) / 180);
     const round = li.shape === 'cyl';
     const inside = round ? (l.x / (li.w / 2)) ** 2 + (l.y / (li.d / 2)) ** 2 <= 1 : Math.abs(l.x) <= li.w / 2 && Math.abs(l.y) <= li.d / 2;

@@ -3,12 +3,13 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { S, P, L, lib, isRug, isRound, isWall, isModel, getImg, radii } from './state.js?v=0.10.3';
-import { roundedBoxGeometry } from './rounded.js?v=0.10.3';
-import { resolveFace, faceDims } from './faces.js?v=0.10.3';
-import { createForsa, fullPose } from './forsa.js?v=0.10.3';
-import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.10.3';
-import { V, pointInPoly, segDist, clamp } from './util.js?v=0.10.3';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, getImg, radii } from './state.js?v=0.11.0';
+import { clothOf } from './cloth.js?v=0.11.0';
+import { roundedBoxGeometry } from './rounded.js?v=0.11.0';
+import { resolveFace, faceDims } from './faces.js?v=0.11.0';
+import { createForsa, fullPose } from './forsa.js?v=0.11.0';
+import { buildRoom, wallEdges, isInterior, boxGeom, winDepth, beamGeom, skirtSegs, doorGeom, supportOf } from './geom.js?v=0.11.0';
+import { V, pointInPoly, segDist, clamp } from './util.js?v=0.11.0';
 
 const M = 0.001; // mm → m
 const BODY_R = 180; // 走動時身體半徑（mm）
@@ -410,6 +411,7 @@ export class View3D {
       const li = lib(it.libId);
       if (!li) continue;
       if (isWall(li)) {
+        if (isCloth(li)) { const m = this.makeCloth(it, li, walls, lay); if (m) this.group.add(m); continue; }
         if (it.host && leafOf.has(it.host)) { this.makeDoorArt(it, li, leafOf.get(it.host)); continue; }
         const m = this.makeArt(it, li, walls); if (m) this.group.add(m); continue;
       }
@@ -645,6 +647,43 @@ export class View3D {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;
+  }
+
+  // 垂墜的布：模擬出來的網格；朝房內那一面用正面（或翻面時的背面），貼牆那一面用另一面
+  makeCloth(it, li, walls, lay) {
+    const W = walls[it.wall];
+    if (!W) return null;
+    const res = clothOf(it, li, W, lay.items, lib);
+    const { nx, ny, pos } = res;
+    const g = new THREE.BufferGeometry();
+    const p = new Float32Array(pos.length), uv = new Float32Array(nx * ny * 2), idx = [];
+    for (let k = 0; k < pos.length; k++) p[k] = pos[k] * M;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const k = j * nx + i;
+      uv[k * 2] = i / (nx - 1); uv[k * 2 + 1] = 1 - j / (ny - 1);
+      if (i + 1 < nx && j + 1 < ny) { const a = k, b = k + nx, c = k + 1, d = k + nx + 1; idx.push(a, b, c, c, b, d); }
+    }
+    g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    const inKey = it.showBack ? 'back' : 'front', outKey = it.showBack ? 'front' : 'back';
+    const front = this.mat(li, inKey), back = this.mat(li, outKey);
+    front.roughness = back.roughness = 0.9;
+    front.side = THREE.FrontSide; back.side = THREE.BackSide;
+    if (back.map) { // 從背後看，u 是反的：把圖左右翻回來
+      back.map = back.map.clone(); this.disposables.push(back.map);
+      back.map.wrapS = THREE.RepeatWrapping; back.map.repeat.x *= -1; back.map.offset.x = 1 - back.map.offset.x; back.map.needsUpdate = true;
+    }
+    const grp = new THREE.Group();
+    const m1 = new THREE.Mesh(g, front), m2 = new THREE.Mesh(g, back);
+    m1.castShadow = true; m1.receiveShadow = m2.receiveShadow = true;
+    grp.add(m1, m2);
+    const right = { x: W.n.y, y: -W.n.x };
+    const c = V.add(W.a, V.scale(W.u, it.off));
+    grp.position.set(c.x * M, it.elev * M, c.y * M);
+    grp.rotation.y = Math.atan2(-right.y, right.x);
+    return grp;
   }
 
   frame() {

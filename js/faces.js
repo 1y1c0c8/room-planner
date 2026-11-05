@@ -6,8 +6,9 @@ export const FACE_SETS = {
   box: [['top', '頂'], ['front', '前'], ['right', '右'], ['back', '後'], ['left', '左'], ['bottom', '底']],
   cyl: [['top', '頂'], ['side', '側面'], ['bottom', '底']],
   wall: [['front', '正面'], ['top', '上緣'], ['right', '右緣'], ['back', '背面'], ['bottom', '下緣'], ['left', '左緣']],
+  cloth: [['front', '正面'], ['back', '背面']],
 };
-export const faceSet = li => FACE_SETS[li.shape === 'wall' ? 'wall' : li.shape === 'cyl' ? 'cyl' : li.shape === 'box' ? 'box' : ''] || null;
+export const faceSet = li => FACE_SETS[li.shape === 'wall' ? 'wall' : li.shape === 'cloth' ? 'cloth' : li.shape === 'cyl' ? 'cyl' : li.shape === 'box' ? 'box' : ''] || null;
 export const faceName = (li, key) => (faceSet(li) || []).find(([k]) => k === key)?.[1] || key;
 
 // 這一面的實際尺寸 [寬, 高]（mm），照片校正比例與材質鋪貼用
@@ -21,6 +22,7 @@ export function faceDims(li, key) {
 
 // 照片的方向提示
 export function faceOrient(li, key) {
+  if (li.shape === 'cloth') return key === 'back' ? '翻面攤平拍，照片上方＝布的上緣' : '攤平正對著拍，照片上方＝布的上緣';
   if (li.shape === 'wall') {
     if (key === 'front') return '正對著拍，照片上方＝物件上方';
     if (key === 'back') return '翻到背面正對著拍，照片上方＝物件上方';
@@ -34,7 +36,7 @@ export function faceOrient(li, key) {
   return '正對著這一面拍，照片上方＝物件上方';
 }
 
-const mainFace = li => (li.shape === 'wall' ? 'front' : 'top');
+const mainFace = li => (li.shape === 'wall' || li.shape === 'cloth' ? 'front' : 'top');
 const plain = li => ({ kind: 'color', color: li.color || '#cbbfae' });
 
 // 算出某一面最後長什麼樣子：{ kind:'color', color } | { kind:'photo'|'tile'|'extend', tex, tileW, tileH, edge, flip }
@@ -42,8 +44,10 @@ export function resolveFace(li, key, depth = 0) {
   const f = li.faces?.[key];
   const mode = f?.mode || 'inherit';
   if (mode === 'inherit') {
+    // 布的背面沒設定：看得到正面花色透過來（左右相反），像織品的反面
+    if (li.shape === 'cloth' && key === 'back' && depth === 0) { const r = resolveFace(li, 'front', 1); return r.kind === 'color' ? r : { ...r, flip: !r.flip }; }
     if (li.tex && li.texMode === 'fit' && key === mainFace(li)) return { kind: 'photo', tex: li.tex };
-    if (li.tex && li.texMode === 'tile' && key !== (li.shape === 'wall' ? 'back' : 'bottom'))
+    if (li.tex && li.texMode === 'tile' && key !== (li.shape === 'wall' ? 'back' : li.shape === 'cloth' ? '' : 'bottom'))
       return { kind: 'tile', tex: li.tex, tileW: li.tileW || 300, tileH: li.tileH || 300 };
     return plain(li);
   }

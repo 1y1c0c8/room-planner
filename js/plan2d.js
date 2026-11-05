@@ -1,9 +1,10 @@
 // 2D 平面編輯器：擺放、旋轉、以任意邊為基準設定距離、量測線
-import { S, P, L, lib, isRug, isRound, isWall, isModel, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.10.3';
-import { resolveFace } from './faces.js?v=0.10.3';
-import { Elev } from './elev.js?v=0.10.3';
-import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.10.3';
-import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.10.3';
+import { clothOf } from './cloth.js?v=0.11.0';
+import { S, P, L, lib, isRug, isRound, isWall, isModel, isCloth, selItem, checkpoint, changed, emit, getImg, radii } from './state.js?v=0.11.0';
+import { resolveFace } from './faces.js?v=0.11.0';
+import { Elev } from './elev.js?v=0.11.0';
+import { V, segDist, cm, uid, clamp, normDeg } from './util.js?v=0.11.0';
+import { buildRoom, wallEdges, itemEdges, itemCorners, doorGeom, refEdges, refKey, isParallel, measureGeom, cornerName, WALL_T, isInterior, winDepth, nm, beamGeom, skirtSegs, supportOf } from './geom.js?v=0.11.0';
 
 const C = {
   bg: '#f4f1ec', grid: 'rgba(70,55,40,.06)', gridMaj: 'rgba(70,55,40,.14)',
@@ -17,7 +18,7 @@ let forsa = null, forsaLoading = false;
 function needForsa() {
   if (forsa || forsaLoading) return;
   forsaLoading = true;
-  import('./forsa.js?v=0.10.3').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
+  import('./forsa.js?v=0.11.0').then(m => { forsa = m; emit('images'); }).catch(() => { forsaLoading = false; });
 }
 
 export class Plan2D {
@@ -345,8 +346,14 @@ export class Plan2D {
       if (!li || !isWall(li) || it.host) continue; // 貼在門上的物件跟著門片，不畫在牆上
       const W = D.walls[it.wall];
       if (!W) continue;
-      const th = Math.max(li.d, 7 / s);
-      const a = V.add(W.a, V.scale(W.u, it.off - li.w / 2)), b = V.add(W.a, V.scale(W.u, it.off + li.w / 2));
+      let th = Math.max(li.d, 7 / s);
+      let a = V.add(W.a, V.scale(W.u, it.off - li.w / 2)), b = V.add(W.a, V.scale(W.u, it.off + li.w / 2));
+      if (isCloth(li)) { // 布：實際垂下來的左右範圍、離牆最遠多少
+        const bx = clothOf(it, li, W, D.lay.items, lib).box, right = { x: W.n.y, y: -W.n.x }, c = V.add(W.a, V.scale(W.u, it.off));
+        a = V.add(c, V.scale(right, bx.x0)); b = V.add(c, V.scale(right, bx.x1));
+        if (V.dot(V.sub(b, a), W.u) < 0) [a, b] = [b, a];
+        th = Math.max(bx.z1, 7 / s);
+      }
       out.push({ kind: 'art', id: it.id, wall: it.wall, label: li.name, li, quad: [a, b, V.add(b, V.scale(W.n, th)), V.add(a, V.scale(W.n, th))], a, b, W });
     }
     return out;

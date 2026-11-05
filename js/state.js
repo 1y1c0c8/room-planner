@@ -1,8 +1,8 @@
 // 全域狀態、存檔、復原/重做、物品庫、圖片、備份匯出入
-import { db } from './db.js?v=0.10.3';
-import { uid } from './util.js?v=0.10.3';
-import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.10.3';
-import { faceTexIds } from './faces.js?v=0.10.3';
+import { db } from './db.js?v=0.11.0';
+import { uid } from './util.js?v=0.11.0';
+import { buildRoom, wallEdges, doorFrame, doorLeafH } from './geom.js?v=0.11.0';
+import { faceTexIds } from './faces.js?v=0.11.0';
 
 export const S = {
   library: [],
@@ -22,7 +22,8 @@ export const lib = id => S.library.find(x => x.id === id);
 export const isRug = li => !!li && (li.shape === 'rug' || li.shape === 'rugRound');
 export const isModel = li => !!li && li.shape === 'model'; // 特製模型（目前有 FORSÅ 工作燈）
 export const isRound = li => !!li && (li.shape === 'cyl' || li.shape === 'rugRound' || li.shape === 'model');
-export const isWall = li => !!li && li.shape === 'wall'; // 牆面物件：畫、海報、鏡子
+export const isWall = li => !!li && (li.shape === 'wall' || li.shape === 'cloth'); // 牆面物件：畫、海報、鏡子、垂墜的布
+export const isCloth = li => !!li && li.shape === 'cloth'; // 布：用釘子固定，模擬自然下垂
 // 圓角（mm）：R＝俯視圓角、r＝邊緣圓角（only 方塊傢俱；矩形地毯只有 R），超過尺寸就夾到最大
 export const radii = li => {
   if (!li || !(li.shape === 'box' || li.shape === 'rug')) return { R: 0, r: 0, both: false };
@@ -139,7 +140,7 @@ export function autoHostDoors(p) {
   let n = 0;
   for (const l of p.layouts) for (const it of l.items) {
     const li = lib(it.libId);
-    if (!li || !isWall(li) || !ok(it.off) || !ok(it.elev)) continue;
+    if (!li || !isWall(li) || isCloth(li) || !ok(it.off) || !ok(it.elev)) continue; // 布不貼門片
     const cur = it.host ? doors.find(d => d.id === it.host) : null;
     const t = (cur ? cur.off : 0) + it.off;
     const on = d => d.wall === it.wall && t > d.off + doorFrame(d) && t < d.off + d.w - doorFrame(d) && it.elev < doorLeafH(d);

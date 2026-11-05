@@ -243,3 +243,7 @@ ul.help li { margin-bottom: 4px; }
 .fcell.on { outline: 2.5px solid var(--accent); outline-offset: 1px; }
 .faceed { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .seg.wrap { flex-wrap: wrap; }
+.facenet.cloth { grid-template-columns: repeat(2, 58px); grid-template-areas: "f b"; }
+.pinrow { border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; background: var(--bg); }
+.pinhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+.warn { color: #a5452c; background: #fbeee8; border-radius: 8px; padding: 6px 8px; margin: 0; }
